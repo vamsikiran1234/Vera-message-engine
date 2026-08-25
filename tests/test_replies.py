@@ -36,6 +36,20 @@ class ReplyTests(unittest.TestCase):
         self.assertEqual(result.action, "send")
         self.assertIn("next action", result.body)
 
+    def test_question_takes_priority_over_confirmation(self):
+        result = handle_reply("conv_4", "Yes, how much is it?", self.conversations, self.suppression)
+
+        self.assertEqual(result.action, "send")
+        self.assertEqual(result.cta, "reply")
+
+    def test_hostile_and_terminal_conversations_end_cleanly(self):
+        hostile = handle_reply("conv_5", "This is useless spam", self.conversations, self.suppression)
+        after_end = handle_reply("conv_5", "Actually go ahead", self.conversations, self.suppression)
+
+        self.assertEqual(hostile.action, "end")
+        self.assertEqual(after_end.action, "end")
+        self.assertIn("already closed", after_end.rationale)
+
 
 if __name__ == "__main__":
     unittest.main()
