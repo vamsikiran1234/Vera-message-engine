@@ -35,6 +35,12 @@ def validate_message(
         reasons.append("customer_consent_missing")
 
     body_lower = body.casefold()
+    for internal_term in (
+        "candidate", "trigger", "decision score", "ranking", "suppression key",
+        "internal state", "dormant signal", "vera signal", "operator check",
+    ):
+        if internal_term in body_lower:
+            reasons.append(f"internal_term:{internal_term}")
     for taboo in _taboos(category):
         if taboo.casefold() in body_lower:
             reasons.append(f"taboo_term:{taboo}")

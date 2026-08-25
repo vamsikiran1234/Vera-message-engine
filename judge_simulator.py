@@ -47,7 +47,7 @@ _load_local_env()
 BOT_URL = os.getenv("BOT_URL", "http://localhost:8080")
 
 # Choose your LLM provider: "openai", "anthropic", "gemini", "deepseek", "groq", "ollama", "openrouter"
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "groq")
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini")
 
 # Your API key (paste your key here)
 LLM_API_KEY = os.getenv("LLM_API_KEY", "")

@@ -31,6 +31,7 @@ def build_message_plan(
     trigger: NormalizedTrigger,
     candidate: CandidateAction,
     customer: CustomerContext | None = None,
+    enriched_facts: dict | None = None,
 ) -> MessagePlan:
     customer_send = trigger.scope == "customer" and customer is not None
     name = customer.identity.get("name") if customer_send else merchant.identity.get("owner_first_name")
@@ -39,16 +40,18 @@ def build_message_plan(
     merchant_hook = candidate.merchant_evidence[0] if candidate.merchant_evidence else ""
     category_hook = candidate.category_evidence[0] if candidate.category_evidence else ""
     value_delivered = "a ready-to-use follow-up" if candidate.action_type in {"recommend", "customer_outreach"} else "the relevant source context"
+    # Use enriched_facts when provided (evidence selection output); fall back to candidate.facts
+    facts = enriched_facts if enriched_facts is not None else dict(candidate.facts)
     return MessagePlan(
         objective=candidate.objective,
         primary_signal=candidate.primary_signal,
-        facts=dict(candidate.facts),
+        facts=facts,
         cta=candidate.cta or "reply",
         send_as="merchant_on_behalf" if customer_send else "vera",
         template_name=_template_name(trigger.kind, customer_send),
         suppression_key=trigger.suppression_key or f"{merchant.merchant_id}:{trigger.kind}:{candidate.objective}",
         rationale=f"{rationale} Recipient: {label}.",
-        supporting_facts=dict(candidate.facts),
+        supporting_facts=facts,
         merchant_hook=merchant_hook,
         category_hook=category_hook,
         value_delivered=value_delivered,

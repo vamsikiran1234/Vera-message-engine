@@ -6,6 +6,7 @@ from dataclasses import replace
 from typing import Any
 
 from .candidates import generate_candidates
+from .evidence_selection import select_evidence
 from .models import CategoryContext, ComposedAction, CustomerContext, MerchantContext, TriggerContext
 from .observability import DecisionEvent, DecisionLogger, DecisionTimer
 from .planner import build_message_plan
@@ -51,7 +52,18 @@ class DecisionEngine:
         top = ranked[0].candidate
         if normalized.suppression_key:
             top.facts.setdefault("suppression_key", normalized.suppression_key)
-        plan = build_message_plan(category, merchant, normalized, top, customer)
+
+        # Evidence selection: enrich the top candidate's facts with grounded,
+        # human-readable evidence before the message plan is built.
+        evidence_bundle = select_evidence(category, merchant, normalized, dict(top.facts), customer)
+        evidence_patch = evidence_bundle.to_facts_patch()
+        if evidence_patch:
+            # CandidateAction is frozen; work with a merged facts dict in the plan
+            enriched_facts = {**top.facts, **evidence_patch}
+        else:
+            enriched_facts = dict(top.facts)
+
+        plan = build_message_plan(category, merchant, normalized, top, customer, enriched_facts)
         body, params = render_message(category, merchant, normalized, plan, customer)
         validation = validate_message(body, plan.cta, category, merchant, plan, customer)
         if not validation.valid:
