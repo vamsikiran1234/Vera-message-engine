@@ -131,7 +131,9 @@ def _render_merchant(
         festival = facts.get("festival") or "the upcoming occasion"
         offer = facts.get("offer", {})
         title = offer.get("title") if isinstance(offer, dict) else None
-        detail = f"{festival} is a fit for {title}" if title else str(festival)
+        days_until = facts.get("days_until")
+        timing = f" in {days_until} days" if days_until is not None else ""
+        detail = f"{festival}{timing} is a great fit for {title}" if title else f"{festival}{timing}"
         return (
             f"{sal}, {detail}. Want me to draft a category-fit campaign?",
             [owner, str(festival), title or ""],
@@ -141,11 +143,22 @@ def _render_merchant(
         # For curious_ask_due, dispatch to the dedicated renderer even if prepare_content was selected
         if trigger.kind == "curious_ask_due":
             return _render_curious_ask(sal, category, merchant, facts)
-        intent = facts.get("intent", {})
-        topic = intent.get("intent_topic") if isinstance(intent, dict) else None
-        topic = str(topic or "the requested topic").replace("_", " ")
+        # active_planning_intent: use top-level intent_topic and merchant_last_message
+        topic = (
+            facts.get("intent_topic")
+            or (facts.get("intent", {}) or {}).get("intent_topic")
+            or "your requested plan"
+        )
+        topic = str(topic).replace("_", " ")
+        merchant_msg = facts.get("merchant_last_message")
+        if merchant_msg:
+            return (
+                f"{sal}, you said: \"{merchant_msg}\" — I am ready to draft the {topic} now. "
+                f"Want me to start with a first version you can edit?",
+                [owner, topic, str(merchant_msg)],
+            )
         return (
-            f"{sal}, I picked up your earlier request about {topic}. "
+            f"{sal}, I can continue the {topic} plan from your earlier request. "
             f"Want me to draft the first version now?",
             [owner, topic],
         )
@@ -177,19 +190,7 @@ def _render_merchant(
         return _render_perf_spike(sal, category, trigger, facts)
 
     if trigger.kind in {"ipl_match_today", "festival", "local_event"}:
-        event = facts.get("match") or facts.get("festival") or facts.get("event")
-        event_time = facts.get("match_time_iso") or facts.get("date")
-        offer = facts.get("offer")
-        offer_title = offer.get("title") if isinstance(offer, dict) else None
-        detail = str(event or "the current event")
-        if event_time:
-            detail += f" at {event_time}"
-        if offer_title:
-            detail += f". Your active offer is {offer_title}"
-        return (
-            f"{sal}, {detail}. Want me to prepare the event promotion?",
-            [owner, detail],
-        )
+        return _render_event(sal, category, trigger, facts)
 
     if trigger.kind == "supply_alert":
         molecule = facts.get("molecule")
@@ -203,8 +204,9 @@ def _render_merchant(
         )
 
     if trigger.kind == "review_theme_emerged":
-        theme = facts.get("theme")
+        theme_raw = facts.get("theme")
         occurrences = facts.get("occurrences_30d")
+        theme = _readable_theme(theme_raw)
         detail = f"{occurrences} reviews mention {theme}" if occurrences and theme else str(theme or "a review theme")
         return (
             f"{sal}, {detail} in the last 30 days. Want me to draft a response plan?",
@@ -245,15 +247,31 @@ def _render_merchant(
 
     if trigger.kind == "gbp_unverified":
         path = facts.get("verification_path")
-        detail = f"via {path}" if path else "through the available verification path"
+        uplift = facts.get("estimated_uplift_pct")
+        peer_ctr_str = _peer_ctr_sentence(facts)
+        path_str = str(path).replace("_", " ") if path else "postcard or phone call"
+        uplift_note = f" Verified profiles typically see {_percent(uplift)} more profile views." if uplift else ""
+        position_note = f" Currently {peer_ctr_str}." if peer_ctr_str else ""
         return (
-            f"{sal}, your business profile is still unverified {detail}. "
-            f"Want me to prepare the verification steps?",
-            [owner, detail],
+            f"{sal}, your business profile is unverified — verification is via {path_str}.{uplift_note}{position_note} "
+            f"Want me to prepare the step-by-step verification guide?",
+            [owner, path_str],
         )
 
     if trigger.kind == "active_planning_intent":
-        topic = facts.get("intent_topic", "your requested plan").replace("_", " ")
+        topic = (
+            facts.get("intent_topic")
+            or (facts.get("intent", {}) or {}).get("intent_topic")
+            or "your requested plan"
+        )
+        topic = str(topic).replace("_", " ")
+        merchant_msg = facts.get("merchant_last_message")
+        if merchant_msg:
+            return (
+                f"{sal}, you said: \"{merchant_msg}\" — I am ready to draft the {topic} now. "
+                f"Want me to start with a first version you can edit?",
+                [owner, topic, str(merchant_msg)],
+            )
         return (
             f"{sal}, I can continue the {topic} plan from your earlier request. "
             f"Want me to draft the first version?",
@@ -291,6 +309,54 @@ def _render_merchant(
     )
 
 
+def _render_event(
+    sal: str,
+    category: CategoryContext,
+    trigger: NormalizedTrigger,
+    facts: dict[str, Any],
+) -> tuple[str, list[str]]:
+    """Render ipl_match_today, festival, local_event triggers with readable timestamps."""
+    match = facts.get("match")
+    festival = facts.get("festival")
+    event = match or festival or facts.get("event")
+    venue = facts.get("venue")
+    city = facts.get("city")
+    is_weeknight = facts.get("is_weeknight")
+    raw_time = facts.get("match_time_iso") or facts.get("date")
+    offer = facts.get("offer")
+    offer_title = offer.get("title") if isinstance(offer, dict) else None
+
+    # Format ISO timestamp to human-readable time
+    readable_time = _format_event_time(raw_time)
+
+    detail_parts: list[str] = []
+    if event:
+        detail_parts.append(str(event))
+    if venue:
+        detail_parts.append(f"at {venue}")
+    elif city:
+        detail_parts.append(f"in {city}")
+    if readable_time:
+        detail_parts.append(f"at {readable_time}")
+    detail = ", ".join(detail_parts) if detail_parts else "today's event"
+
+    # For IPL: add the is_weeknight insight (weeknight = good for restaurants)
+    insight = ""
+    if trigger.kind == "ipl_match_today" and is_weeknight is not None:
+        if is_weeknight:
+            insight = " Weeknight matches typically drive footfall — good time to push your offer."
+        else:
+            insight = " Weekend IPL matches usually shift orders to home-watching — consider delivery-focused promotion instead of dine-in."
+
+    offer_note = f" Your active offer: {offer_title}." if offer_title else ""
+
+    return (
+        f"{sal}, {detail} tonight.{insight}{offer_note} "
+        f"Want me to prepare the promotion?",
+        [sal, detail, offer_title or ""],
+    )
+
+
 # ---------------------------------------------------------------------------
 # Specialised render helpers
 # ---------------------------------------------------------------------------
@@ -306,22 +372,48 @@ def _render_digest(
     item = facts.get("digest_item", {})
     title = item.get("title") if isinstance(item, dict) else None
     source = item.get("source") if isinstance(item, dict) else None
+    actionable = item.get("actionable") if isinstance(item, dict) else None
+    item_date = item.get("date") if isinstance(item, dict) else None
+
     body = f"{sal}, a relevant {category.slug} update landed"
     if title:
         body += f": {title}"
+
     segment = item.get("patient_segment") if isinstance(item, dict) else None
     if segment == "high_risk_adults":
         count = facts.get("high_risk_adult_count") or merchant.customer_aggregate.get("high_risk_adult_count")
         if count:
             body += f". Your roster includes {count} high-risk adult patients"
+
     if source:
         body += f" ({source})"
-    if trigger.kind == "research_digest":
-        cta = "Want me to pull the source and draft a patient message?"
+
+    # CDE-specific enrichment: surface date, credits, and fee from trigger payload
+    if trigger.kind == "cde_opportunity":
+        credits = facts.get("credits") or trigger.facts.get("credits")
+        fee = facts.get("fee") or trigger.facts.get("fee")
+        if item_date:
+            readable = _format_event_time(item_date) or str(item_date)[:10]
+            body += f" — {readable}"
+        if credits and fee:
+            fee_str = str(fee).replace("_", " ")
+            body += f". {credits} CDE credits, {fee_str}"
+        elif credits:
+            body += f". {credits} CDE credits"
+        if actionable:
+            cta = f"{actionable}. Want me to add it to your calendar?"
+        else:
+            cta = "Want me to add it to your calendar and draft a reminder?"
+    elif trigger.kind == "research_digest":
+        if actionable:
+            cta = f"Want me to pull the source and draft a patient message?"
+        else:
+            cta = "Want me to pull the source and draft a patient message?"
     elif plan.cta == "confirm":
         cta = "Should I prepare the compliance checklist?"
     else:
         cta = "Want me to prepare the next step?"
+
     owner = str(merchant.identity.get("owner_first_name") or "")
     return f"{body}. {cta}", [owner, title or "", source or ""]
 
@@ -376,19 +468,24 @@ def _render_perf_spike(
     delta = trigger.facts.get("delta_pct")
     peer_sentence = _peer_ctr_sentence(facts)
 
+    # Grammar fix: "calls" is a count noun, not a rate noun — use "count" suffix
+    metric_label = _metric_display(metric)
+
     if metric and delta is not None:
-        body = f"{sal}, your {metric} is up {_percent(delta)} this week"
+        body = f"{sal}, your {metric_label} is up {_percent(delta)} this week"
         if peer_sentence:
             body += f". {peer_sentence.capitalize()}"
         if offer_title:
             body += f". Your active offer is {offer_title}"
-        return f"{body}. Want me to prepare a promotion to capitalise on this?", [sal, metric, _percent(delta)]
+        return f"{body}. Want me to prepare a promotion to capitalise on this?", [sal, metric_label, _percent(delta)]
 
+    # Fallback: use category voice term for "demand" rather than the slug
+    demand_noun = _category_demand_noun(category.slug)
     detail = f" Your active offer is {offer_title}." if offer_title else ""
     if peer_sentence:
         detail = f" {peer_sentence.capitalize()}.{detail}"
     return (
-        f"{sal}, demand for {category.slug} is up.{detail} "
+        f"{sal}, {demand_noun} is up this week.{detail} "
         f"Want me to prepare a promotion?",
         [sal, offer_title or ""],
     )
@@ -528,6 +625,79 @@ def _render_winback(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _format_event_time(raw: Any) -> str:
+    """Parse an ISO-8601 timestamp or date string and return a readable time string.
+
+    Returns '' if the value cannot be parsed or contains no time component.
+    Never raises — gracefully returns '' on any parse failure.
+    """
+    if not raw:
+        return ""
+    s = str(raw)
+    # Look for T or space separator indicating a time component
+    if "T" in s or " " in s:
+        try:
+            # Strip timezone offset (+05:30, Z, etc.) for simple parsing
+            import re as _re
+            # Extract HH:MM from the string
+            m = _re.search(r"[T ](\d{1,2}):(\d{2})", s)
+            if m:
+                hour, minute = int(m.group(1)), int(m.group(2))
+                period = "am" if hour < 12 else "pm"
+                display_hour = hour if hour <= 12 else hour - 12
+                if display_hour == 0:
+                    display_hour = 12
+                return f"{display_hour}:{minute:02d}{period}"
+        except Exception:
+            pass
+    return ""
+
+
+def _readable_theme(raw: str | None) -> str:
+    """Translate an underscore-delimited theme key to a readable phrase."""
+    if not raw:
+        return "a review theme"
+    _THEME_MAP = {
+        "delivery_late": "delivery delays",
+        "delivery_time": "delivery time",
+        "wait_time": "long wait times",
+        "food_quality": "food quality",
+        "pizza_quality": "pizza quality",
+        "service_quality": "service quality",
+        "doctor_manner": "doctor manner",
+        "parking": "parking issues",
+        "price": "pricing",
+        "cleanliness": "cleanliness",
+        "staff": "staff behaviour",
+    }
+    return _THEME_MAP.get(str(raw), str(raw).replace("_", " "))
+
+
+def _metric_display(metric: str | None) -> str:
+    """Return a grammatically correct display label for a performance metric."""
+    if not metric:
+        return "performance"
+    _MAP = {
+        "calls": "call count",
+        "views": "profile views",
+        "directions": "direction requests",
+        "leads": "lead count",
+        "ctr": "CTR",
+    }
+    return _MAP.get(metric, metric.replace("_", " "))
+
+
+def _category_demand_noun(slug: str) -> str:
+    """Return a category-appropriate demand noun for use in perf_spike fallback."""
+    _MAP = {
+        "restaurants": "footfall and order demand",
+        "salons": "booking demand",
+        "gyms": "membership inquiries",
+        "dentists": "appointment inquiries",
+        "pharmacies": "dispensing volume",
+    }
+    return _MAP.get(slug, f"demand for {slug}")
 
 def _salutation(category: CategoryContext, owner: str) -> str:
     if category.slug == "dentists" and owner and not owner.casefold().startswith("dr"):

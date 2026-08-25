@@ -308,7 +308,14 @@ def generate_candidates(
             cta="draft",
             primary_signal="trigger:festival_upcoming",
             evidence=tuple(f"trigger.payload.{key}" for key in sorted(trigger.facts)),
-            facts={"festival": trigger.facts.get("festival"), "date": trigger.facts.get("date"), "offer": offer},
+            # Preserve days_until and category_relevance so the template can use them
+            facts={
+                "festival": trigger.facts.get("festival"),
+                "date": trigger.facts.get("date"),
+                "days_until": trigger.facts.get("days_until"),
+                "category_relevance": trigger.facts.get("category_relevance"),
+                "offer": offer,
+            },
             priority_hint=78,
             trigger_evidence=tuple(f"trigger.payload.{key}" for key in sorted(trigger.facts)),
             merchant_evidence=tuple(merchant.signals),
@@ -316,13 +323,23 @@ def generate_candidates(
         ))
 
     if trigger.kind in {"active_planning_intent", "curious_ask_due"} and recent_history:
+        # Surface intent_topic and merchant_last_message as top-level keys so
+        # the template can read them directly without dict nesting.
+        intent_facts: dict[str, Any] = {
+            "intent": trigger.facts,
+            "recent_message": recent_history[-1],
+        }
+        if trigger.facts.get("intent_topic"):
+            intent_facts["intent_topic"] = trigger.facts["intent_topic"]
+        if trigger.facts.get("merchant_last_message"):
+            intent_facts["merchant_last_message"] = trigger.facts["merchant_last_message"]
         candidates.append(CandidateAction(
             objective="prepare_content",
             action_type="recommend",
             cta="draft",
             primary_signal=f"trigger:{trigger.kind}",
             evidence=tuple(f"trigger.payload.{key}" for key in sorted(trigger.facts)),
-            facts={"intent": trigger.facts, "recent_message": recent_history[-1]},
+            facts=intent_facts,
             priority_hint=86 if trigger.kind == "active_planning_intent" else 68,
             trigger_evidence=tuple(f"trigger.payload.{key}" for key in sorted(trigger.facts)),
             merchant_evidence=tuple(merchant.signals),
