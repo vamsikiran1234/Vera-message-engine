@@ -24,8 +24,10 @@ class TemplateTests(unittest.TestCase):
 
         body, params = render_message(category, merchant, trigger, build_message_plan(category, merchant, trigger, candidate))
 
+        self.assertIn("Dr. Meera", body)
         self.assertIn("Recall update", body)
         self.assertIn("JIDA", body)
+        self.assertIn("patient message", body)
         self.assertEqual(params[0], "Meera")
 
 

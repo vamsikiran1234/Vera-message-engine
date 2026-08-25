@@ -53,22 +53,37 @@ def _render_merchant(
         item = facts.get("digest_item", {})
         title = item.get("title") if isinstance(item, dict) else None
         source = item.get("source") if isinstance(item, dict) else None
-        body = f"{owner}, a relevant {category.slug} update landed"
+        body = f"{_salutation(category, owner)}, a relevant {category.slug} update landed"
         if title:
             body += f": {title}"
+        segment = item.get("patient_segment") if isinstance(item, dict) else None
+        if segment == "high_risk_adults":
+            count = merchant.customer_aggregate.get("high_risk_adult_count")
+            if count:
+                body += f" Your roster includes {count} high-risk adult patients"
         if source:
             body += f" ({source})"
-        return f"{body}. Want me to prepare the next step?", [owner, title or "", source or ""]
+        cta = "Want me to pull the source and draft a patient message?" if trigger.kind == "research_digest" else "Want me to prepare the next step?"
+        return f"{body}. {cta}", [owner, title or "", source or ""]
     if trigger.kind in {"perf_dip", "seasonal_perf_dip"}:
         performance = facts.get("performance", {})
         metric = performance.get("metric") if isinstance(performance, dict) else None
         delta = performance.get("delta_pct") if isinstance(performance, dict) else None
         if metric and delta is not None:
-            return f"{owner}, your {metric} is down {_percent(delta)} in the current trigger window. Want me to review the next action?", [owner, metric, _percent(delta)]
+            return f"{_salutation(category, owner)}, your {metric} is down {_percent(delta)} in the current trigger window. Want me to review the next action?", [owner, metric, _percent(delta)]
     if trigger.kind in {"perf_spike", "category_seasonal"}:
-        return f"{owner}, the current demand signal is worth acting on for {category.slug}. Want me to prepare a promotion?", [owner]
+        offer = facts.get("offer")
+        offer_title = offer.get("title") if isinstance(offer, dict) else None
+        detail = f" Your active offer is {offer_title}." if offer_title else ""
+        return f"{_salutation(category, owner)}, the current demand signal is worth acting on for {category.slug}.{detail} Want me to prepare a promotion?", [owner, offer_title or ""]
     topic = trigger.kind.replace("_", " ") or "current signal"
-    return f"{owner}, I found a {topic} signal for your business. Want me to show the grounded details?", [owner, topic]
+    return f"{_salutation(category, owner)}, I found a {topic} signal for your business. Want me to show the grounded details?", [owner, topic]
+
+
+def _salutation(category: CategoryContext, owner: str) -> str:
+    if category.slug == "dentists" and owner and not owner.casefold().startswith("dr"):
+        return f"Dr. {owner}"
+    return owner
 
 
 def _first_fact(facts: dict[str, Any], *names: str) -> str:
