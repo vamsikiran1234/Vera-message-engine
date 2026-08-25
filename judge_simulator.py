@@ -64,6 +64,15 @@ GROQ_MODELS = [
     if model.strip()
 ]
 
+GEMINI_MODELS = [
+    model.strip()
+    for model in os.getenv(
+        "GEMINI_MODELS",
+        "gemini-3.6-flash,gemini-3.5-flash,gemini-3.1-flash-lite",
+    ).split(",")
+    if model.strip()
+]
+
 # For Ollama only: local server URL
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 
@@ -240,7 +249,7 @@ class AnthropicProvider(LLMProvider):
 class GeminiProvider(LLMProvider):
     def __init__(self, api_key: str, model: str = ""):
         self.api_key = api_key
-        self.model = model or "gemini-1.5-flash"
+        self.model = model or GEMINI_MODELS[0]
 
     def name(self) -> str:
         return f"Gemini ({self.model})"
@@ -257,6 +266,27 @@ class GeminiProvider(LLMProvider):
         resp = urlrequest.urlopen(req, timeout=TIMEOUT_LLM)
         data = json.loads(resp.read().decode("utf-8"))
         return data["candidates"][0]["content"]["parts"][0]["text"]
+
+
+class GeminiFallbackProvider(LLMProvider):
+    """Try configured Gemini models in order when one is unavailable."""
+
+    def __init__(self, api_key: str, models: list[str]):
+        self.providers = [GeminiProvider(api_key, model) for model in models]
+
+    def name(self) -> str:
+        return "Gemini (" + " -> ".join(provider.model for provider in self.providers) + ")"
+
+    def complete(self, prompt: str, system: str = None) -> str:
+        last_error = None
+        for index, provider in enumerate(self.providers):
+            try:
+                return provider.complete(prompt, system)
+            except Exception as error:
+                last_error = error
+                if index < len(self.providers) - 1:
+                    print_warn(f"{provider.model} unavailable; trying next Gemini model")
+        raise last_error or RuntimeError("No Gemini models configured")
 
 
 class DeepSeekProvider(LLMProvider):
@@ -382,7 +412,7 @@ def create_provider() -> LLMProvider:
     providers = {
         "openai": lambda: OpenAIProvider(LLM_API_KEY, LLM_MODEL),
         "anthropic": lambda: AnthropicProvider(LLM_API_KEY, LLM_MODEL),
-        "gemini": lambda: GeminiProvider(LLM_API_KEY, LLM_MODEL),
+        "gemini": lambda: GeminiProvider(LLM_API_KEY, LLM_MODEL) if LLM_MODEL else GeminiFallbackProvider(LLM_API_KEY, GEMINI_MODELS),
         "deepseek": lambda: DeepSeekProvider(LLM_API_KEY, LLM_MODEL),
         "groq": lambda: GroqProvider(LLM_API_KEY, LLM_MODEL) if LLM_MODEL else GroqFallbackProvider(LLM_API_KEY, GROQ_MODELS),
         "ollama": lambda: OllamaProvider(LLM_MODEL, OLLAMA_URL),
