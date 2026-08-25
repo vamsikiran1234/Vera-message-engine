@@ -11,17 +11,23 @@ from .signals import NormalizedTrigger, Signal
 
 @dataclass(frozen=True)
 class ScoringWeights:
-    trigger_strength: float = 0.25
-    merchant_impact: float = 0.20
-    category_fit: float = 0.15
-    actionability: float = 0.15
-    customer_relevance: float = 0.10
-    urgency: float = 0.10
-    specificity: float = 0.05
-    merchant_relevance: float = 0.05
-    offer_compatibility: float = 0.05
-    conversation_continuity: float = 0.05
-    evidence_strength: float = 0.05
+    # Phase 2 rebalance: urgency block cut from 0.35 → 0.20 (was trigger_strength=0.25,
+    # urgency=0.10).  Freed budget redistributed to actionability (+0.07) and
+    # evidence_strength (+0.08) so that well-evidenced opportunity triggers (dormant,
+    # winback, festival, curious_ask) compete fairly against high-urgency alerts.
+    # Total weight sum remains 1.20 (same as original — the scoring formula does not
+    # normalise, so preserving the sum avoids compressing absolute score values).
+    trigger_strength: float = 0.15      # was 0.25 — urgency still matters, just halved
+    merchant_impact: float = 0.20       # unchanged
+    category_fit: float = 0.15         # unchanged
+    actionability: float = 0.22        # was 0.15 — rewards high priority_hint candidates
+    customer_relevance: float = 0.10   # unchanged
+    urgency: float = 0.05              # was 0.10 — eliminates double-counting with trigger_strength
+    specificity: float = 0.05          # unchanged
+    merchant_relevance: float = 0.05   # unchanged
+    offer_compatibility: float = 0.05  # unchanged
+    conversation_continuity: float = 0.05  # unchanged
+    evidence_strength: float = 0.13    # was 0.05 — rewards richer grounded evidence packs
 
 
 @dataclass(frozen=True)
