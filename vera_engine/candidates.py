@@ -160,13 +160,16 @@ def generate_candidates(
             ))
 
     if not candidates and (trigger.facts or merchant.signals):
+        fallback_facts = dict(trigger.facts)
+        if offer:
+            fallback_facts["offer"] = offer
         candidates.append(CandidateAction(
             objective="review_current_signal",
             action_type="inform",
             cta="reply",
             primary_signal=f"trigger:{trigger.kind or 'unknown'}",
             evidence=tuple(f"trigger.payload.{key}" for key in sorted(trigger.facts)),
-            facts=dict(trigger.facts),
+            facts=fallback_facts,
             priority_hint=max(10, trigger.urgency * 10),
         ))
 

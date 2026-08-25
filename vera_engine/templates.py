@@ -81,6 +81,63 @@ def _render_merchant(
         offer_title = offer.get("title") if isinstance(offer, dict) else None
         detail = f" Your active offer is {offer_title}." if offer_title else ""
         return f"{_salutation(category, owner)}, the current demand signal is worth acting on for {category.slug}.{detail} Want me to prepare a promotion?", [owner, offer_title or ""]
+    if trigger.kind in {"ipl_match_today", "festival", "local_event"}:
+        event = facts.get("match") or facts.get("festival") or facts.get("event")
+        event_time = facts.get("match_time_iso") or facts.get("date")
+        offer = facts.get("offer")
+        offer_title = offer.get("title") if isinstance(offer, dict) else None
+        detail = str(event or "the current event")
+        if event_time:
+            detail += f" at {event_time}"
+        if offer_title:
+            detail += f". Your active offer is {offer_title}"
+        return f"{_salutation(category, owner)}, {detail}. Want me to prepare the event promotion?", [owner, detail]
+    if trigger.kind == "supply_alert":
+        molecule = facts.get("molecule")
+        batches = facts.get("affected_batches")
+        manufacturer = facts.get("manufacturer")
+        details = _join_facts(molecule, batches, manufacturer)
+        return f"{_salutation(category, owner)}, a supply alert affects {details}. Want me to prepare the affected-customer review list?", [owner, details]
+    if trigger.kind == "review_theme_emerged":
+        theme = facts.get("theme")
+        occurrences = facts.get("occurrences_30d")
+        detail = f"{occurrences} reviews mention {theme}" if occurrences and theme else str(theme or "a review theme")
+        return f"{_salutation(category, owner)}, {detail} in the last 30 days. Want me to draft a response plan?", [owner, detail]
+    if trigger.kind == "competitor_opened":
+        competitor = facts.get("competitor_name")
+        distance = facts.get("distance_km")
+        detail = f"{competitor} opened {distance} km away" if competitor and distance else "a nearby competitor opened"
+        return f"{_salutation(category, owner)}, {detail}. Want me to review your current listing response?", [owner, detail]
+    if trigger.kind == "renewal_due":
+        days = facts.get("days_remaining")
+        amount = facts.get("renewal_amount")
+        detail = f"in {days} days" if days is not None else "soon"
+        if amount is not None:
+            detail += f" for ₹{amount}"
+        return f"{_salutation(category, owner)}, your {merchant.subscription.get('plan', 'current')} plan renews {detail}. Want me to prepare the renewal details?", [owner, detail]
+    if trigger.kind == "milestone_reached":
+        metric = facts.get("metric")
+        value = facts.get("value_now") or facts.get("milestone_value")
+        detail = f"{value} {metric.replace('_', ' ')}" if metric and value is not None else "a new milestone"
+        return f"{_salutation(category, owner)}, you are at {detail}. Want me to draft a milestone post?", [owner, detail]
+    if trigger.kind == "festival_upcoming":
+        festival = facts.get("festival")
+        date = facts.get("date")
+        detail = f"{festival} is on {date}" if festival and date else str(festival or "an upcoming occasion")
+        return f"{_salutation(category, owner)}, {detail}. Want me to prepare one category-fit campaign idea?", [owner, detail]
+    if trigger.kind == "gbp_unverified":
+        path = facts.get("verification_path")
+        detail = f"via {path}" if path else "through the available verification path"
+        return f"{_salutation(category, owner)}, your business profile is still unverified {detail}. Want me to prepare the verification steps?", [owner, detail]
+    if trigger.kind == "active_planning_intent":
+        topic = facts.get("intent_topic", "your requested plan").replace("_", " ")
+        return f"{_salutation(category, owner)}, I can continue the {topic} plan from your earlier request. Want me to draft the first version?", [owner, topic]
+    if trigger.kind == "curious_ask_due":
+        return f"{_salutation(category, owner)}, quick operator check for {category.slug}: which service or product was asked for most this week?", [owner, category.slug]
+    if trigger.kind == "winback_eligible":
+        days = facts.get("days_since_expiry")
+        detail = f"{days} days since expiry" if days is not None else "your win-back signal"
+        return f"{_salutation(category, owner)}, I found {detail} with a customer opportunity behind it. Want me to prepare a win-back draft?", [owner, detail]
     topic = trigger.kind.replace("_", " ") or "current signal"
     return f"{_salutation(category, owner)}, I found a {topic} signal for your business. Want me to show the grounded details?", [owner, topic]
 
@@ -109,3 +166,13 @@ def _percent(value: Any) -> str:
         return f"{abs(float(value)) * 100:g}%"
     except (TypeError, ValueError):
         return str(value)
+
+
+def _join_facts(*values: Any) -> str:
+    parts = []
+    for value in values:
+        if isinstance(value, list):
+            parts.append(", ".join(str(item) for item in value))
+        elif value:
+            parts.append(str(value))
+    return " / ".join(parts) or "the reported item"
