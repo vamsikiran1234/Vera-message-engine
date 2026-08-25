@@ -30,15 +30,37 @@ def _render_customer(
     customer_name = str(customer.identity.get("name") or "there")
     merchant_name = str(merchant.identity.get("name") or "The clinic")
     facts = plan.facts
+    greeting = _customer_greeting(category_slug=merchant.category_slug, customer=customer)
     if trigger.kind in {"recall_due", "appointment_tomorrow", "trial_followup"}:
-        detail = _first_fact(facts, "customer_due_date", "customer_available_slots", "customer_next_session_options")
-        body = f"Hi {customer_name}, {merchant_name} has a follow-up for you."
+        detail = _first_fact(
+            facts,
+            "customer_available_slots", "available_slots", "customer_next_session_options",
+            "next_session_options", "customer_due_date", "due_date",
+        )
+        if trigger.kind == "recall_due" and facts.get("service_due"):
+            service = f"your {str(facts['service_due']).replace('_', ' ')} is due"
+            detail = f"{service}; {detail}" if detail else service
+        body = f"{greeting} {customer_name}, {merchant_name} has a follow-up for you."
         if detail:
             body += f" {detail}."
+        offer = facts.get("offer")
+        if isinstance(offer, dict) and offer.get("title"):
+            body += f" Available: {offer['title']}."
         return f"{body} Want me to confirm it?", [customer_name, merchant_name, detail]
     if trigger.kind in {"customer_lapsed_soft", "customer_lapsed_hard"}:
-        return f"Hi {customer_name}, {merchant_name} would be glad to welcome you back. Want me to book a visit?", [customer_name, merchant_name]
-    return f"Hi {customer_name}, {merchant_name} has an update for you. Want me to confirm the next step?", [customer_name, merchant_name]
+        days = facts.get("days_since_last_visit")
+        detail = f"It has been {days} days since your last visit. " if days else ""
+        return f"{greeting} {customer_name}, {detail}{merchant_name} would be glad to welcome you back. Want me to book a visit?", [customer_name, merchant_name, str(days or "")]
+    return f"{greeting} {customer_name}, {merchant_name} has an update for you. Want me to confirm the next step?", [customer_name, merchant_name]
+
+
+def _customer_greeting(category_slug: str, customer: CustomerContext) -> str:
+    language = str(customer.identity.get("language_pref", "")).casefold()
+    if category_slug == "pharmacies" and language.startswith("hi"):
+        return "Namaste"
+    if category_slug == "gyms":
+        return "Hi"
+    return "Hi"
 
 
 def _render_merchant(

@@ -56,14 +56,20 @@ def generate_candidates(
             return []
         if trigger.kind in {"recall_due", "chronic_refill_due", "appointment_tomorrow", "trial_followup"}:
             facts = {signal.name: signal.value for signal in signals if signal.name.startswith("customer_")}
+            facts.update(trigger.facts)
+            if offer:
+                facts["offer"] = offer
             candidates.append(CandidateAction(
                 objective="customer_follow_up",
                 action_type="customer_outreach",
                 cta="confirm",
                 primary_signal="customer_followup",
                 evidence=tuple(evidence for signal in signals for evidence in signal.evidence),
-                facts={"customer_name": customer.identity.get("name", ""), **facts},
+                facts={"customer_name": customer.identity.get("name", ""), "customer_state": customer.state, **facts},
                 priority_hint=90,
+                merchant_evidence=(str(offer.get("title")),) if offer else (),
+                customer_evidence=(customer.state, str(customer.preferences.get("preferred_slots", ""))),
+                offer_evidence=(str(offer.get("title")),) if offer else (),
             ))
         elif trigger.kind in {"customer_lapsed_soft", "customer_lapsed_hard"} and "customer_lapse" in by_name:
             candidates.append(CandidateAction(
@@ -72,8 +78,10 @@ def generate_candidates(
                 cta="book",
                 primary_signal="customer_lapse",
                 evidence=by_name["customer_lapse"].evidence,
-                facts={"customer_name": customer.identity.get("name", ""), "state": customer.state},
+                facts={"customer_name": customer.identity.get("name", ""), "state": customer.state, **trigger.facts, **({"offer": offer} if offer else {})},
                 priority_hint=80,
+                customer_evidence=(customer.state, str(customer.preferences.get("preferred_slots", ""))),
+                offer_evidence=(str(offer.get("title")),) if offer else (),
             ))
         return candidates
 
