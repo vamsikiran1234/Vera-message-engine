@@ -132,6 +132,24 @@ def _render_merchant(
         offer = facts.get("offer", {})
         title = offer.get("title") if isinstance(offer, dict) else None
         days_until = facts.get("days_until")
+        proximity_factor = facts.get("proximity_factor", 1.0)
+        seasonal_beat_note = facts.get("seasonal_beat_note", "")
+        seasonal_beat_months = facts.get("seasonal_beat_months", "")
+        has_planning_intent = facts.get("has_planning_intent", False)
+
+        # Honest distant-event framing: when the festival is far away and
+        # the merchant has not expressed planning intent, acknowledge the
+        # long horizon explicitly rather than pretending urgency.
+        if days_until is not None and days_until > 120 and not has_planning_intent:
+            season_context = f" Your {seasonal_beat_months} season is your category's biggest" if seasonal_beat_months else ""
+            offer_note = f" Your active offer, {title}, could anchor the campaign." if title else ""
+            return (
+                f"{sal}, {festival} is {days_until} days away.{season_context}.{offer_note} "
+                f"Want me to flag this for planning closer to the season?",
+                [owner, str(festival), str(days_until)],
+            )
+
+        # Near-term or planning-intent path: direct campaign framing
         timing = f" in {days_until} days" if days_until is not None else ""
         detail = f"{festival}{timing} is a great fit for {title}" if title else f"{festival}{timing}"
         return (
@@ -181,6 +199,10 @@ def _render_merchant(
     # --- Trigger-kind dispatch ---
 
     if trigger.kind in {"research_digest", "cde_opportunity", "regulation_change"}:
+        return _render_digest(sal, category, merchant, trigger, facts, plan)
+
+    # festival_upcoming can produce a seasonal digest competitor — route it to _render_digest
+    if trigger.kind == "festival_upcoming" and plan.objective == "share_relevant_category_knowledge":
         return _render_digest(sal, category, merchant, trigger, facts, plan)
 
     if trigger.kind in {"perf_dip", "seasonal_perf_dip"}:
@@ -405,10 +427,13 @@ def _render_digest(
         else:
             cta = "Want me to add it to your calendar and draft a reminder?"
     elif trigger.kind == "research_digest":
+        cta = "Want me to pull the source and draft a patient message?"
+    elif trigger.kind == "festival_upcoming":
+        # Competing seasonal digest candidate — current-window opportunity
         if actionable:
-            cta = f"Want me to pull the source and draft a patient message?"
+            cta = f"{actionable} Want me to act on this now?"
         else:
-            cta = "Want me to pull the source and draft a patient message?"
+            cta = "Want me to act on this seasonal opportunity now?"
     elif plan.cta == "confirm":
         cta = "Should I prepare the compliance checklist?"
     else:
