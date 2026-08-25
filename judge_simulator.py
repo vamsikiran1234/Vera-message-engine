@@ -22,6 +22,27 @@ Author: magicpin AI Challenge Team
 
 import os
 
+
+def _load_local_env() -> None:
+    """Load simple KEY=VALUE entries without overwriting process variables."""
+    env_path = os.path.join(os.path.dirname(__file__), ".env")
+    try:
+        with open(env_path, encoding="utf-8") as env_file:
+            for raw_line in env_file:
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                if key and key not in os.environ:
+                    os.environ[key] = value
+    except OSError:
+        pass
+
+
+_load_local_env()
+
 # Your bot's URL (where your bot is running)
 BOT_URL = os.getenv("BOT_URL", "http://localhost:8080")
 
@@ -33,6 +54,24 @@ LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 
 # Model to use (leave empty for default, or specify like "gpt-4o", "claude-3-5-sonnet-20241022", etc.)
 LLM_MODEL = os.getenv("LLM_MODEL", "")
+
+GROQ_MODELS = [
+    model.strip()
+    for model in os.getenv(
+        "GROQ_MODELS",
+        "openai/gpt-oss-120b,openai/gpt-oss-20b,llama-3.3-70b-versatile",
+    ).split(",")
+    if model.strip()
+]
+
+GEMINI_MODELS = [
+    model.strip()
+    for model in os.getenv(
+        "GEMINI_MODELS",
+        "gemini-3.6-flash,gemini-3.5-flash,gemini-3.1-flash-lite",
+    ).split(",")
+    if model.strip()
+]
 
 # For Ollama only: local server URL
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
@@ -210,7 +249,7 @@ class AnthropicProvider(LLMProvider):
 class GeminiProvider(LLMProvider):
     def __init__(self, api_key: str, model: str = ""):
         self.api_key = api_key
-        self.model = model or "gemini-1.5-flash"
+        self.model = model or GEMINI_MODELS[0]
 
     def name(self) -> str:
         return f"Gemini ({self.model})"
@@ -227,6 +266,27 @@ class GeminiProvider(LLMProvider):
         resp = urlrequest.urlopen(req, timeout=TIMEOUT_LLM)
         data = json.loads(resp.read().decode("utf-8"))
         return data["candidates"][0]["content"]["parts"][0]["text"]
+
+
+class GeminiFallbackProvider(LLMProvider):
+    """Try configured Gemini models in order when one is unavailable."""
+
+    def __init__(self, api_key: str, models: list[str]):
+        self.providers = [GeminiProvider(api_key, model) for model in models]
+
+    def name(self) -> str:
+        return "Gemini (" + " -> ".join(provider.model for provider in self.providers) + ")"
+
+    def complete(self, prompt: str, system: str = None) -> str:
+        last_error = None
+        for index, provider in enumerate(self.providers):
+            try:
+                return provider.complete(prompt, system)
+            except Exception as error:
+                last_error = error
+                if index < len(self.providers) - 1:
+                    print_warn(f"{provider.model} unavailable; trying next Gemini model")
+        raise last_error or RuntimeError("No Gemini models configured")
 
 
 class DeepSeekProvider(LLMProvider):
@@ -257,7 +317,7 @@ class DeepSeekProvider(LLMProvider):
 class GroqProvider(LLMProvider):
     def __init__(self, api_key: str, model: str = ""):
         self.api_key = api_key
-        self.model = model or "llama-3.1-70b-versatile"
+        self.model = model or GROQ_MODELS[0]
 
     def name(self) -> str:
         return f"Groq ({self.model})"
@@ -277,6 +337,27 @@ class GroqProvider(LLMProvider):
         resp = urlrequest.urlopen(req, timeout=TIMEOUT_LLM)
         data = json.loads(resp.read().decode("utf-8"))
         return data["choices"][0]["message"]["content"]
+
+
+class GroqFallbackProvider(LLMProvider):
+    """Try configured Groq models in order when one is unavailable."""
+
+    def __init__(self, api_key: str, models: list[str]):
+        self.providers = [GroqProvider(api_key, model) for model in models]
+
+    def name(self) -> str:
+        return "Groq (" + " -> ".join(provider.model for provider in self.providers) + ")"
+
+    def complete(self, prompt: str, system: str = None) -> str:
+        last_error = None
+        for index, provider in enumerate(self.providers):
+            try:
+                return provider.complete(prompt, system)
+            except Exception as error:
+                last_error = error
+                if index < len(self.providers) - 1:
+                    print_warn(f"{provider.model} unavailable; trying next Groq model")
+        raise last_error or RuntimeError("No Groq models configured")
 
 
 class OllamaProvider(LLMProvider):
@@ -331,9 +412,9 @@ def create_provider() -> LLMProvider:
     providers = {
         "openai": lambda: OpenAIProvider(LLM_API_KEY, LLM_MODEL),
         "anthropic": lambda: AnthropicProvider(LLM_API_KEY, LLM_MODEL),
-        "gemini": lambda: GeminiProvider(LLM_API_KEY, LLM_MODEL),
+        "gemini": lambda: GeminiProvider(LLM_API_KEY, LLM_MODEL) if LLM_MODEL else GeminiFallbackProvider(LLM_API_KEY, GEMINI_MODELS),
         "deepseek": lambda: DeepSeekProvider(LLM_API_KEY, LLM_MODEL),
-        "groq": lambda: GroqProvider(LLM_API_KEY, LLM_MODEL),
+        "groq": lambda: GroqProvider(LLM_API_KEY, LLM_MODEL) if LLM_MODEL else GroqFallbackProvider(LLM_API_KEY, GROQ_MODELS),
         "ollama": lambda: OllamaProvider(LLM_MODEL, OLLAMA_URL),
         "openrouter": lambda: OpenRouterProvider(LLM_API_KEY, LLM_MODEL),
     }
@@ -540,22 +621,29 @@ Score each dimension 0-10 with clear reasoning. Be STRICT."""
 
     def _parse_response(self, response: str, action: Dict) -> ScoreResult:
         """Parse LLM JSON response."""
-        match = re.search(r'\{[\s\S]*\}', response)
-        if not match:
+        data = None
+        decoder = json.JSONDecoder()
+        for match in re.finditer(r"\{", response):
+            try:
+                data, _ = decoder.raw_decode(response[match.start():])
+                if isinstance(data, dict):
+                    break
+            except json.JSONDecodeError:
+                continue
+        if not isinstance(data, dict):
             return self._fallback_score(action)
 
         try:
-            data = json.loads(match.group())
             result = ScoreResult(
-                specificity=min(10, max(0, int(data.get("specificity", 5)))),
+                specificity=self._score_value(data.get("specificity", 5)),
                 specificity_reason=data.get("specificity_reason", ""),
-                category_fit=min(10, max(0, int(data.get("category_fit", 5)))),
+                category_fit=self._score_value(data.get("category_fit", 5)),
                 category_fit_reason=data.get("category_fit_reason", ""),
-                merchant_fit=min(10, max(0, int(data.get("merchant_fit", 5)))),
+                merchant_fit=self._score_value(data.get("merchant_fit", 5)),
                 merchant_fit_reason=data.get("merchant_fit_reason", ""),
-                decision_quality=min(10, max(0, int(data.get("decision_quality", data.get("trigger_relevance", 5))))),
+                decision_quality=self._score_value(data.get("decision_quality", data.get("trigger_relevance", 5))),
                 decision_quality_reason=data.get("decision_quality_reason", data.get("trigger_relevance_reason", "")),
-                engagement_compulsion=min(10, max(0, int(data.get("engagement_compulsion", 5)))),
+                engagement_compulsion=self._score_value(data.get("engagement_compulsion", 5)),
                 engagement_reason=data.get("engagement_reason", ""),
                 hint=data.get("hint", "")
             )
@@ -563,6 +651,17 @@ Score each dimension 0-10 with clear reasoning. Be STRICT."""
         except Exception as e:
             print_warn(f"Parse error: {e}")
             return self._fallback_score(action)
+
+    @staticmethod
+    def _score_value(value: Any) -> int:
+        """Normalize strict-judge scores such as 8, 8.0, or '8/10'."""
+        if isinstance(value, str):
+            match = re.search(r"\d+(?:\.\d+)?", value)
+            value = match.group() if match else 5
+        try:
+            return min(10, max(0, int(float(value))))
+        except (TypeError, ValueError):
+            return 5
 
     def _fallback_score(self, action: Dict) -> ScoreResult:
         """Basic fallback scoring."""
