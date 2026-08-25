@@ -67,6 +67,22 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(len(response.json()["actions"]), 1)
         self.assertEqual(response.json()["actions"][0]["trigger_id"], "trg_tick")
 
+    def test_reply_handles_opt_out(self):
+        response = self.client.post(
+            "/v1/reply",
+            json={
+                "conversation_id": "conv_optout",
+                "merchant_id": "m_api",
+                "from_role": "merchant",
+                "message": "Please stop messaging me",
+                "received_at": "now",
+                "turn_number": 2,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["action"], "end")
+
 
 if __name__ == "__main__":
     unittest.main()
