@@ -22,6 +22,27 @@ Author: magicpin AI Challenge Team
 
 import os
 
+
+def _load_local_env() -> None:
+    """Load simple KEY=VALUE entries without overwriting process variables."""
+    env_path = os.path.join(os.path.dirname(__file__), ".env")
+    try:
+        with open(env_path, encoding="utf-8") as env_file:
+            for raw_line in env_file:
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                if key and key not in os.environ:
+                    os.environ[key] = value
+    except OSError:
+        pass
+
+
+_load_local_env()
+
 # Your bot's URL (where your bot is running)
 BOT_URL = os.getenv("BOT_URL", "http://localhost:8080")
 
@@ -33,6 +54,15 @@ LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 
 # Model to use (leave empty for default, or specify like "gpt-4o", "claude-3-5-sonnet-20241022", etc.)
 LLM_MODEL = os.getenv("LLM_MODEL", "")
+
+GROQ_MODELS = [
+    model.strip()
+    for model in os.getenv(
+        "GROQ_MODELS",
+        "openai/gpt-oss-120b,openai/gpt-oss-20b,llama-3.3-70b-versatile",
+    ).split(",")
+    if model.strip()
+]
 
 # For Ollama only: local server URL
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
@@ -257,7 +287,7 @@ class DeepSeekProvider(LLMProvider):
 class GroqProvider(LLMProvider):
     def __init__(self, api_key: str, model: str = ""):
         self.api_key = api_key
-        self.model = model or "llama-3.1-70b-versatile"
+        self.model = model or GROQ_MODELS[0]
 
     def name(self) -> str:
         return f"Groq ({self.model})"
@@ -277,6 +307,27 @@ class GroqProvider(LLMProvider):
         resp = urlrequest.urlopen(req, timeout=TIMEOUT_LLM)
         data = json.loads(resp.read().decode("utf-8"))
         return data["choices"][0]["message"]["content"]
+
+
+class GroqFallbackProvider(LLMProvider):
+    """Try configured Groq models in order when one is unavailable."""
+
+    def __init__(self, api_key: str, models: list[str]):
+        self.providers = [GroqProvider(api_key, model) for model in models]
+
+    def name(self) -> str:
+        return "Groq (" + " -> ".join(provider.model for provider in self.providers) + ")"
+
+    def complete(self, prompt: str, system: str = None) -> str:
+        last_error = None
+        for index, provider in enumerate(self.providers):
+            try:
+                return provider.complete(prompt, system)
+            except Exception as error:
+                last_error = error
+                if index < len(self.providers) - 1:
+                    print_warn(f"{provider.model} unavailable; trying next Groq model")
+        raise last_error or RuntimeError("No Groq models configured")
 
 
 class OllamaProvider(LLMProvider):
@@ -333,7 +384,7 @@ def create_provider() -> LLMProvider:
         "anthropic": lambda: AnthropicProvider(LLM_API_KEY, LLM_MODEL),
         "gemini": lambda: GeminiProvider(LLM_API_KEY, LLM_MODEL),
         "deepseek": lambda: DeepSeekProvider(LLM_API_KEY, LLM_MODEL),
-        "groq": lambda: GroqProvider(LLM_API_KEY, LLM_MODEL),
+        "groq": lambda: GroqProvider(LLM_API_KEY, LLM_MODEL) if LLM_MODEL else GroqFallbackProvider(LLM_API_KEY, GROQ_MODELS),
         "ollama": lambda: OllamaProvider(LLM_MODEL, OLLAMA_URL),
         "openrouter": lambda: OpenRouterProvider(LLM_API_KEY, LLM_MODEL),
     }

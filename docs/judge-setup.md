@@ -10,11 +10,21 @@ The Vera bot itself does not require an API key. The local judge uses an LLM to 
 ```powershell
 $env:LLM_PROVIDER = "groq"
 $env:LLM_API_KEY = "paste-your-groq-key-here"
-$env:LLM_MODEL = "llama-3.1-70b-versatile"
+$env:LLM_MODEL = ""
 python judge_simulator.py
 ```
 
 The key is read from the environment and is never written to the repository. Do not paste the real key into `.env.example`, `judge_simulator.py`, or any tracked file.
+
+With `LLM_MODEL` blank, the simulator tries these Groq production models in order:
+
+```text
+openai/gpt-oss-120b
+openai/gpt-oss-20b
+llama-3.3-70b-versatile
+```
+
+The first model is recommended for judge quality. The second is a faster fallback. The third is an additional production fallback if the GPT-OSS models are unavailable to the account.
 
 ## Scenarios
 
