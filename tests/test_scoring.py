@@ -35,6 +35,24 @@ class ScoringTests(unittest.TestCase):
 
         self.assertEqual(ranked[0].components["customer_relevance"], 0.0)
 
+    def test_contextual_evidence_increases_candidate_score(self):
+        category = CategoryContext.from_payload({"slug": "dentists"})
+        merchant = MerchantContext.from_payload({"merchant_id": "m_1", "category_slug": "dentists"})
+        trigger = normalize_trigger(TriggerContext.from_payload({"id": "trg_1", "merchant_id": "m_1", "urgency": 2}))
+        generic = CandidateAction("generic", "inform", "view", "signal")
+        contextual = CandidateAction(
+            "contextual", "recommend", "approve", "signal",
+            merchant_evidence=("high_risk_adult_cohort",),
+            offer_evidence=("Dental Cleaning @ 299",),
+            conversation_evidence=("merchant requested a related draft",),
+            evidence=("trigger.payload.topic",),
+        )
+
+        ranked = rank_candidates(category, merchant, trigger, [generic, contextual], [])
+
+        self.assertEqual(ranked[0].candidate.objective, "contextual")
+        self.assertGreater(ranked[0].components["merchant_relevance"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

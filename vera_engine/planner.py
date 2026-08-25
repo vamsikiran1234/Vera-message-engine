@@ -19,6 +19,10 @@ class MessagePlan:
     template_name: str
     suppression_key: str
     rationale: str
+    supporting_facts: dict = None
+    merchant_hook: str = ""
+    category_hook: str = ""
+    value_delivered: str = ""
 
 
 def build_message_plan(
@@ -32,6 +36,9 @@ def build_message_plan(
     name = customer.identity.get("name") if customer_send else merchant.identity.get("owner_first_name")
     label = name or merchant.identity.get("name") or "there"
     rationale = f"Selected {candidate.objective} because {candidate.primary_signal} has grounded evidence from the current context."
+    merchant_hook = candidate.merchant_evidence[0] if candidate.merchant_evidence else ""
+    category_hook = candidate.category_evidence[0] if candidate.category_evidence else ""
+    value_delivered = "a ready-to-use follow-up" if candidate.action_type in {"recommend", "customer_outreach"} else "the relevant source context"
     return MessagePlan(
         objective=candidate.objective,
         primary_signal=candidate.primary_signal,
@@ -41,6 +48,10 @@ def build_message_plan(
         template_name=_template_name(trigger.kind, customer_send),
         suppression_key=trigger.suppression_key or f"{merchant.merchant_id}:{trigger.kind}:{candidate.objective}",
         rationale=f"{rationale} Recipient: {label}.",
+        supporting_facts=dict(candidate.facts),
+        merchant_hook=merchant_hook,
+        category_hook=category_hook,
+        value_delivered=value_delivered,
     )
 
 

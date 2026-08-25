@@ -51,6 +51,30 @@ class CandidateTests(unittest.TestCase):
 
         self.assertEqual(candidates[0].facts, {"topic": "new opening"})
 
+    def test_research_candidate_preserves_merchant_offer_and_history_evidence(self):
+        category = CategoryContext.from_payload({
+            "slug": "dentists",
+            "digest": [{"id": "d1", "title": "Recall research", "patient_segment": "high_risk_adults"}],
+        })
+        merchant = MerchantContext.from_payload({
+            "merchant_id": "m_1", "category_slug": "dentists",
+            "offers": [{"title": "Dental Cleaning @ ₹299", "status": "active"}],
+            "signals": ["high_risk_adult_cohort"],
+            "customer_aggregate": {"high_risk_adult_count": 12},
+            "conversation_history": [{"body": "Focus on whitening and aligners"}],
+        })
+        trigger = normalize_trigger(TriggerContext.from_payload({
+            "id": "t1", "kind": "research_digest", "merchant_id": "m_1",
+            "payload": {"top_item_id": "d1"},
+        }))
+
+        candidates = generate_candidates(category, merchant, trigger, extract_signals(category, merchant, trigger))
+
+        candidate = candidates[0]
+        self.assertEqual(candidate.facts["high_risk_adult_count"], 12)
+        self.assertTrue(candidate.offer_evidence)
+        self.assertTrue(candidate.conversation_evidence)
+
 
 if __name__ == "__main__":
     unittest.main()

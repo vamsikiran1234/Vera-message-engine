@@ -18,6 +18,12 @@ class CandidateAction:
     evidence: tuple[str, ...] = ()
     facts: dict[str, Any] = field(default_factory=dict)
     priority_hint: int = 0
+    trigger_evidence: tuple[str, ...] = ()
+    merchant_evidence: tuple[str, ...] = ()
+    category_evidence: tuple[str, ...] = ()
+    customer_evidence: tuple[str, ...] = ()
+    offer_evidence: tuple[str, ...] = ()
+    conversation_evidence: tuple[str, ...] = ()
 
 
 def _active_offer(merchant: MerchantContext) -> dict[str, Any] | None:
@@ -73,14 +79,31 @@ def generate_candidates(
 
     if trigger.kind in {"research_digest", "cde_opportunity"} and "category_digest_item" in by_name:
         item = by_name["category_digest_item"].value
+        merchant_evidence = tuple(str(signal) for signal in merchant.signals if signal)
+        category_evidence = tuple(
+            str(item.get(key)) for key in ("patient_segment", "actionable") if item.get(key)
+        )
+        conversation_evidence = tuple(
+            str(turn.get("body")) for turn in merchant.conversation_history[-2:] if turn.get("body")
+        )
+        facts = {"digest_item": item}
+        if merchant.customer_aggregate.get("high_risk_adult_count") and item.get("patient_segment") == "high_risk_adults":
+            facts["high_risk_adult_count"] = merchant.customer_aggregate["high_risk_adult_count"]
+        if offer:
+            facts["offer"] = offer
         candidates.append(CandidateAction(
             objective="share_relevant_category_knowledge",
             action_type="inform",
             cta="view",
             primary_signal="category_digest_item",
             evidence=by_name["category_digest_item"].evidence,
-            facts={"digest_item": item},
-            priority_hint=70,
+            facts=facts,
+            priority_hint=85 if merchant_evidence or conversation_evidence else 70,
+            trigger_evidence=by_name["category_digest_item"].evidence,
+            merchant_evidence=merchant_evidence,
+            category_evidence=category_evidence,
+            offer_evidence=(str(offer.get("title")),) if offer else (),
+            conversation_evidence=conversation_evidence,
         ))
 
     if trigger.kind == "regulation_change" and "category_digest_item" in by_name:
@@ -90,8 +113,10 @@ def generate_candidates(
             cta="confirm",
             primary_signal="category_digest_item",
             evidence=by_name["category_digest_item"].evidence,
-            facts={"digest_item": by_name["category_digest_item"].value},
+            facts={"digest_item": by_name["category_digest_item"].value, "deadline": trigger.facts.get("deadline_iso", "")},
             priority_hint=95,
+            trigger_evidence=by_name["category_digest_item"].evidence,
+            category_evidence=(str(trigger.facts.get("deadline_iso")),) if trigger.facts.get("deadline_iso") else (),
         ))
 
     if trigger.kind in {"perf_dip", "seasonal_perf_dip"} and "performance_decline" in by_name:

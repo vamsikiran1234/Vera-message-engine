@@ -631,7 +631,9 @@ Score each dimension 0-10 with clear reasoning. Be STRICT."""
             except json.JSONDecodeError:
                 continue
         if not isinstance(data, dict):
-            return self._fallback_score(action)
+            data = self._extract_score_fields(response)
+            if not data:
+                return self._fallback_score(action)
 
         try:
             result = ScoreResult(
@@ -662,6 +664,20 @@ Score each dimension 0-10 with clear reasoning. Be STRICT."""
             return min(10, max(0, int(float(value))))
         except (TypeError, ValueError):
             return 5
+
+    @staticmethod
+    def _extract_score_fields(response: str) -> Dict[str, Any]:
+        """Recover score fields when the model emits almost-valid JSON."""
+        fields: Dict[str, Any] = {}
+        score_names = (
+            "specificity", "category_fit", "merchant_fit", "decision_quality",
+            "engagement_compulsion",
+        )
+        for name in score_names:
+            match = re.search(rf'["\']?{name}["\']?\s*:\s*["\']?([0-9]+(?:\.[0-9]+)?)', response, re.IGNORECASE)
+            if match:
+                fields[name] = match.group(1)
+        return fields
 
     def _fallback_score(self, action: Dict) -> ScoreResult:
         """Basic fallback scoring."""
