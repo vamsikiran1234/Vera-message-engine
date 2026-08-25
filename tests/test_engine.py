@@ -4,6 +4,7 @@ from pathlib import Path
 
 from vera_engine.engine import DecisionEngine
 from vera_engine.models import ContextEnvelope
+from vera_engine.observability import DecisionLogger
 from vera_engine.store import ContextStore, ConversationStore, SuppressionStore
 
 
@@ -46,6 +47,23 @@ class EngineTests(unittest.TestCase):
 
         self.assertIsNotNone(action)
         self.assertIn("compliance checklist", action.body)
+
+    def test_selected_action_records_decision_diagnostics(self):
+        root = Path("expanded")
+        contexts = ContextStore()
+        for scope, path, context_id in [
+            ("category", root / "categories/dentists.json", "dentists"),
+            ("merchant", root / "merchants/m_001_drmeera_dentist_delhi.json", "m_001_drmeera_dentist_delhi"),
+            ("trigger", root / "triggers/trg_001_research_digest_dentists.json", "trg_001_research_digest_dentists"),
+        ]:
+            contexts.put(ContextEnvelope(scope, context_id, 1, json.loads(path.read_text()), "now"))
+        logger = DecisionLogger()
+        action = DecisionEngine(contexts, ConversationStore(), SuppressionStore(), logger).compose_trigger("trg_001_research_digest_dentists")
+
+        self.assertIsNotNone(action)
+        self.assertEqual(logger.events[-1].outcome, "selected")
+        self.assertTrue(logger.events[-1].candidate_scores)
+        self.assertGreaterEqual(logger.events[-1].latency_ms, 0)
 
 
 if __name__ == "__main__":
