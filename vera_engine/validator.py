@@ -104,7 +104,7 @@ def _factual_tokens(body: str) -> list[str]:
 def _cta_intent_present(body_lower: str, cta: str) -> bool:
     intents = {
         "confirm": ("confirm", "should i", "want me to prepare", "shall i prepare"),
-        "approve": ("approve", "should i", "want me to proceed"),
+        "approve": ("approve", "should i", "want me to proceed", "want me to prepare"),
         "promote": ("promote", "promotion"),
         "send": ("send", "draft"),
         "book": ("book", "booking", "reserve"),
