@@ -41,7 +41,7 @@ vera_engine/
   categories.py                Category policy lookup and generic fallback policy
   signals.py                   Trigger/merchant/customer signal extraction
   scoring.py                   Candidate scoring and stable tie-breaking
-  suppression.py               Deduplication, opt-out, and conflict rules
+  selection.py                 Deduplication, opt-out, and conflict rules
   planner.py                   Action and message-plan construction
   templates.py                 Deterministic category-aware message renderers
   validator.py                 Grounding, CTA, safety, and repetition checks
