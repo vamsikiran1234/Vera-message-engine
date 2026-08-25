@@ -621,22 +621,29 @@ Score each dimension 0-10 with clear reasoning. Be STRICT."""
 
     def _parse_response(self, response: str, action: Dict) -> ScoreResult:
         """Parse LLM JSON response."""
-        match = re.search(r'\{[\s\S]*\}', response)
-        if not match:
+        data = None
+        decoder = json.JSONDecoder()
+        for match in re.finditer(r"\{", response):
+            try:
+                data, _ = decoder.raw_decode(response[match.start():])
+                if isinstance(data, dict):
+                    break
+            except json.JSONDecodeError:
+                continue
+        if not isinstance(data, dict):
             return self._fallback_score(action)
 
         try:
-            data = json.loads(match.group())
             result = ScoreResult(
-                specificity=min(10, max(0, int(data.get("specificity", 5)))),
+                specificity=self._score_value(data.get("specificity", 5)),
                 specificity_reason=data.get("specificity_reason", ""),
-                category_fit=min(10, max(0, int(data.get("category_fit", 5)))),
+                category_fit=self._score_value(data.get("category_fit", 5)),
                 category_fit_reason=data.get("category_fit_reason", ""),
-                merchant_fit=min(10, max(0, int(data.get("merchant_fit", 5)))),
+                merchant_fit=self._score_value(data.get("merchant_fit", 5)),
                 merchant_fit_reason=data.get("merchant_fit_reason", ""),
-                decision_quality=min(10, max(0, int(data.get("decision_quality", data.get("trigger_relevance", 5))))),
+                decision_quality=self._score_value(data.get("decision_quality", data.get("trigger_relevance", 5))),
                 decision_quality_reason=data.get("decision_quality_reason", data.get("trigger_relevance_reason", "")),
-                engagement_compulsion=min(10, max(0, int(data.get("engagement_compulsion", 5)))),
+                engagement_compulsion=self._score_value(data.get("engagement_compulsion", 5)),
                 engagement_reason=data.get("engagement_reason", ""),
                 hint=data.get("hint", "")
             )
@@ -644,6 +651,17 @@ Score each dimension 0-10 with clear reasoning. Be STRICT."""
         except Exception as e:
             print_warn(f"Parse error: {e}")
             return self._fallback_score(action)
+
+    @staticmethod
+    def _score_value(value: Any) -> int:
+        """Normalize strict-judge scores such as 8, 8.0, or '8/10'."""
+        if isinstance(value, str):
+            match = re.search(r"\d+(?:\.\d+)?", value)
+            value = match.group() if match else 5
+        try:
+            return min(10, max(0, int(float(value))))
+        except (TypeError, ValueError):
+            return 5
 
     def _fallback_score(self, action: Dict) -> ScoreResult:
         """Basic fallback scoring."""
