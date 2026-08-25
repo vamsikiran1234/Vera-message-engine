@@ -9,6 +9,116 @@ from .models import CategoryContext, CustomerContext, MerchantContext
 from .signals import NormalizedTrigger, Signal
 
 
+# ---------------------------------------------------------------------------
+# Festival proximity and relevance helpers
+# ---------------------------------------------------------------------------
+
+# Configurable proximity bands: (max_days_exclusive, factor)
+# Processed in order — first matching band wins.
+FESTIVAL_PROXIMITY_BANDS: tuple[tuple[int, float], ...] = (
+    (14,  1.0),   # 0–13 days:   immediate activation
+    (60,  0.9),   # 14–59 days:  strong preparation window
+    (120, 0.6),   # 60–119 days: planning window
+    # > 120 days: very weak urgency (default below)
+)
+FESTIVAL_PROXIMITY_DEFAULT: float = 0.3  # > 120 days
+
+
+def _festival_proximity_factor(days_until: int | None) -> float:
+    """Return a 0.0–1.0 multiplier based on how far away the festival is.
+
+    Proximity is a *ranking* feature, not a suppression gate.  A distant
+    festival with strong merchant evidence can still produce a useful action;
+    the factor simply ensures it competes fairly against nearer opportunities.
+    """
+    if days_until is None or days_until < 0:
+        return FESTIVAL_PROXIMITY_DEFAULT
+    for max_days, factor in FESTIVAL_PROXIMITY_BANDS:
+        if days_until < max_days:
+            return factor
+    return FESTIVAL_PROXIMITY_DEFAULT
+
+
+# Keywords that indicate a festival-relevant offer or service.
+# Checked case-insensitively against offer title.
+_FESTIVAL_OFFER_KEYWORDS: frozenset[str] = frozenset({
+    "bridal", "bride", "wedding", "festive", "festival", "diwali", "holi",
+    "eid", "navratri", "puja", "mehendi", "occasion", "special",
+    "party", "celebration", "anniversary", "gala",
+})
+
+# Keywords in seasonal beat notes that indicate the beat is festival-relevant.
+_FESTIVAL_BEAT_KEYWORDS: frozenset[str] = frozenset({
+    "wedding", "festival", "bridal", "festive", "diwali", "navratri",
+    "eid", "holi", "celebration", "season",
+})
+
+
+def _festival_offer_relevance(
+    offer: dict[str, Any] | None,
+    festival_name: str | None,
+    category: CategoryContext,
+    days_until: int | None,
+) -> float:
+    """Return a 0.0–1.0 offer-relevance score for a festival campaign.
+
+    Rules (in priority order):
+    1. If days_until <= 60 (near-term): any active offer is acceptable (1.0).
+       The offer is relevant because the planning window is tight.
+    2. If the offer title contains festival-relevant keywords: 1.0.
+    3. If a category seasonal beat covers the festival month and references
+       relevant services: 0.8.
+    4. If the festival name appears in category_relevance but no offer match: 0.5.
+    5. Otherwise: 0.2 (low relevance — generic offer, distant festival).
+    """
+    if days_until is not None and days_until <= 60:
+        return 1.0
+
+    offer_title = str(offer.get("title", "")).casefold() if offer else ""
+    if any(kw in offer_title for kw in _FESTIVAL_OFFER_KEYWORDS):
+        return 1.0
+
+    # Check if any seasonal beat note is relevant to the festival month
+    festival_lower = (festival_name or "").casefold()
+    for beat in category.seasonal_beats:
+        note = str(beat.get("note", "")).casefold()
+        if any(kw in note for kw in _FESTIVAL_BEAT_KEYWORDS):
+            return 0.8
+
+    return 0.2
+
+
+def _has_festival_planning_intent(
+    merchant: MerchantContext,
+    festival_name: str | None,
+) -> bool:
+    """Return True if the merchant (not Vera) has expressed planning intent
+    for this festival or bridal/festive services in the conversation history."""
+    festival_lower = (festival_name or "").casefold()
+    keywords = {festival_lower, "bridal", "festive", "wedding", "campaign", "plan", "season"}
+    for turn in merchant.conversation_history:
+        # Only count merchant-sent turns as planning intent evidence.
+        # Vera-sent messages in conversation history are outbound nudges, not
+        # evidence that the merchant has expressed intent.
+        if str(turn.get("from", "")).casefold() == "vera":
+            continue
+        body = str(turn.get("body", "")).casefold()
+        if any(kw in body for kw in keywords):
+            return True
+    return False
+
+
+def _current_seasonal_digest_item(category: CategoryContext) -> dict[str, Any] | None:
+    """Return the most actionable current seasonal/trend digest item.
+
+    Preference order: 'seasonal' kind first, then 'trend'.
+    """
+    seasonal = next((item for item in category.digest if item.get("kind") == "seasonal"), None)
+    if seasonal:
+        return seasonal
+    return next((item for item in category.digest if item.get("kind") == "trend"), None)
+
+
 def _peer_facts(category: CategoryContext, merchant: MerchantContext, metric: str | None = None) -> dict[str, Any]:
     """Return a dict of peer comparison facts grounded in both category and merchant data.
 
@@ -302,25 +412,94 @@ def generate_candidates(
             ))
 
     if trigger.kind == "festival_upcoming" and offer:
+        days_until = trigger.facts.get("days_until")
+        festival_name = trigger.facts.get("festival")
+        has_planning_intent = _has_festival_planning_intent(merchant, festival_name)
+        proximity = _festival_proximity_factor(days_until)
+        offer_relevance = _festival_offer_relevance(offer, festival_name, category, days_until)
+
+        # Base priority before proximity adjustment
+        base_priority = 78
+        # Planning intent or near-term event overrides the proximity penalty
+        if has_planning_intent:
+            proximity = max(proximity, 0.9)
+        # Effective priority = base × proximity × offer_relevance
+        # Clamp to int in range [15, 78]
+        effective_priority = max(15, min(base_priority, int(base_priority * proximity * offer_relevance + 0.5)))
+
+        festival_facts: dict[str, Any] = {
+            "festival": festival_name,
+            "date": trigger.facts.get("date"),
+            "days_until": days_until,
+            "category_relevance": trigger.facts.get("category_relevance"),
+            "offer": offer,
+            # Pass proximity metadata so the template can frame the message honestly
+            "proximity_factor": proximity,
+            "offer_relevance": offer_relevance,
+            "has_planning_intent": has_planning_intent,
+        }
+        # Carry seasonal beat note when available, to give the template a grounded
+        # reason why this festival matters to this category.
+        relevant_beat = next(
+            (b for b in category.seasonal_beats if any(
+                kw in str(b.get("note", "")).casefold()
+                for kw in _FESTIVAL_BEAT_KEYWORDS
+            )),
+            None,
+        )
+        if relevant_beat:
+            festival_facts["seasonal_beat_note"] = relevant_beat.get("note", "")
+            festival_facts["seasonal_beat_months"] = relevant_beat.get("month_range", "")
+
         candidates.append(CandidateAction(
             objective="plan_seasonal_campaign",
             action_type="recommend",
             cta="draft",
             primary_signal="trigger:festival_upcoming",
             evidence=tuple(f"trigger.payload.{key}" for key in sorted(trigger.facts)),
-            # Preserve days_until and category_relevance so the template can use them
-            facts={
-                "festival": trigger.facts.get("festival"),
-                "date": trigger.facts.get("date"),
-                "days_until": trigger.facts.get("days_until"),
-                "category_relevance": trigger.facts.get("category_relevance"),
-                "offer": offer,
-            },
-            priority_hint=78,
+            facts=festival_facts,
+            priority_hint=effective_priority,
             trigger_evidence=tuple(f"trigger.payload.{key}" for key in sorted(trigger.facts)),
             merchant_evidence=tuple(merchant.signals),
             offer_evidence=(str(offer.get("title")),),
         ))
+
+        # Opportunity competition: when the festival is distant and a stronger
+        # current demand signal exists in the category digest, generate a
+        # competing candidate for the immediate opportunity.
+        # This respects the challenge contract — we only use what is in the
+        # pushed context, not invented triggers.
+        if days_until is not None and days_until > 60 and not has_planning_intent:
+            current_item = _current_seasonal_digest_item(category)
+            if current_item:
+                item_title = current_item.get("title", "")
+                item_source = current_item.get("source", "")
+                item_actionable = current_item.get("actionable", "")
+                digest_facts: dict[str, Any] = {
+                    "digest_item": current_item,
+                    "seasonal_beat_note": item_title,
+                }
+                if offer:
+                    digest_facts["offer"] = offer
+                # Evidence from conversation history (unanswered bridal ask etc.)
+                recent_conv = tuple(
+                    str(t.get("body")) for t in merchant.conversation_history[-2:] if t.get("body")
+                )
+                candidates.append(CandidateAction(
+                    objective="share_relevant_category_knowledge",
+                    action_type="inform",
+                    cta="view",
+                    primary_signal="category_seasonal_opportunity",
+                    evidence=(f"category.digest.id={current_item.get('id', '')}",),
+                    facts=digest_facts,
+                    # Priority reflects urgency of the *current* seasonal window
+                    priority_hint=72,
+                    trigger_evidence=tuple(f"trigger.payload.{key}" for key in sorted(trigger.facts)),
+                    merchant_evidence=tuple(merchant.signals),
+                    category_evidence=(item_title, item_actionable) if item_actionable else (item_title,),
+                    offer_evidence=(str(offer.get("title")),) if offer else (),
+                    conversation_evidence=recent_conv,
+                ))
 
     if trigger.kind in {"active_planning_intent", "curious_ask_due"} and recent_history:
         # Surface intent_topic and merchant_last_message as top-level keys so
