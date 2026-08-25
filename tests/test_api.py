@@ -53,6 +53,20 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(tick.json(), {"actions": []})
         self.assertEqual(reply.json()["action"], "wait")
 
+    def test_tick_composes_pushed_context(self):
+        for payload in [
+            {"scope": "category", "context_id": "cafes", "version": 1, "payload": {"slug": "cafes"}, "delivered_at": "now"},
+            {"scope": "merchant", "context_id": "m_tick", "version": 1, "payload": {"merchant_id": "m_tick", "category_slug": "cafes", "identity": {"owner_first_name": "Asha"}}, "delivered_at": "now"},
+            {"scope": "trigger", "context_id": "trg_tick", "version": 1, "payload": {"id": "trg_tick", "kind": "new_signal", "merchant_id": "m_tick", "payload": {"topic": "new demand"}, "suppression_key": "tick:one"}, "delivered_at": "now"},
+        ]:
+            self.assertEqual(self.client.post("/v1/context", json=payload).status_code, 200)
+
+        response = self.client.post("/v1/tick", json={"now": "now", "available_triggers": ["trg_tick"]})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.json()["actions"]), 1)
+        self.assertEqual(response.json()["actions"][0]["trigger_id"], "trg_tick")
+
 
 if __name__ == "__main__":
     unittest.main()

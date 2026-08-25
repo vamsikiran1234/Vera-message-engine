@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from vera_engine.engine import DecisionEngine, action_to_dict
 from vera_engine.models import ContextEnvelope
 from vera_engine.store import ContextStore, ConversationStore, InvalidScopeError, SuppressionStore, utc_now
 
@@ -102,7 +103,15 @@ def push_context(body: ContextRequest) -> dict[str, Any]:
 
 @app.post("/v1/tick")
 def tick(body: TickRequest) -> dict[str, list[Any]]:
-    return {"actions": []}
+    engine = DecisionEngine(context_store, conversation_store, suppression_store)
+    actions = []
+    for trigger_id in body.available_triggers:
+        if len(actions) >= 20:
+            break
+        action = engine.compose_trigger(trigger_id)
+        if action:
+            actions.append(action_to_dict(action))
+    return {"actions": actions}
 
 
 @app.post("/v1/reply")
