@@ -20,6 +20,7 @@ NEGATIVE_MARKERS = ("not interested", "not now", "no thanks", "maybe later", "no
 ACTION_MARKERS = ("let's do it", "lets do it", "go ahead", "proceed", "send it", "do it", "yes")
 QUESTION_MARKERS = ("?", "how much", "what offer", "how long", "which", "when", "where")
 OFF_TOPIC_MARKERS = ("gst", "tax filing", "unrelated", "legal advice")
+HOSTILE_MARKERS = ("useless", "spam", "idiot", "shut up", "hate this")
 
 
 def classify_reply(message: str) -> str:
@@ -32,10 +33,12 @@ def classify_reply(message: str) -> str:
         return "OFF_TOPIC"
     if any(marker in text for marker in NEGATIVE_MARKERS):
         return "NO"
-    if any(marker in text for marker in ACTION_MARKERS):
-        return "CONFIRMATION"
     if any(marker in text for marker in QUESTION_MARKERS):
         return "REQUEST_DETAILS"
+    if any(marker in text for marker in ACTION_MARKERS):
+        return "CONFIRMATION"
+    if any(marker in text for marker in HOSTILE_MARKERS):
+        return "HOSTILE"
     return "ACKNOWLEDGEMENT"
 
 
@@ -50,6 +53,8 @@ def handle_reply(
     turn_number: int = 1,
 ) -> ReplyResult:
     state = conversations.get_or_create(conversation_id, merchant_id, customer_id)
+    if state.terminal:
+        return ReplyResult("end", rationale="Conversation is already closed; no further message will be sent.")
     intent = classify_reply(message)
     state.turns.append({"from": "merchant", "body": message, "intent": intent, "turn_number": turn_number, "received_at": received_at})
 
@@ -73,6 +78,11 @@ def handle_reply(
 
     if intent == "OFF_TOPIC":
         return ReplyResult("send", body="That is outside what I can help with directly. I can continue with the current merchant-growth task when you are ready.", cta="reply", rationale="Politely declined an unsupported off-topic request and preserved the conversation mission.")
+
+    if intent == "HOSTILE":
+        state.terminal = True
+        suppression.suppress_conversation(conversation_id)
+        return ReplyResult("end", rationale="Hostile feedback detected; ending the conversation without escalating or sending another pitch.")
 
     if intent == "REQUEST_DETAILS":
         return ReplyResult("send", body="I can share the details from the active context first. Which part should I clarify: the offer, timing, or next step?", cta="reply", rationale="Answered the request without inventing details and kept the original action available.")
