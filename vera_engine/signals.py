@@ -17,6 +17,7 @@ class NormalizedTrigger:
     urgency: int
     merchant_id: str
     customer_id: str | None
+    suppression_key: str
     facts: dict[str, Any] = field(default_factory=dict)
     is_placeholder: bool = False
 
@@ -46,6 +47,7 @@ def normalize_trigger(trigger: TriggerContext) -> NormalizedTrigger:
         urgency=max(0, min(5, trigger.urgency)),
         merchant_id=trigger.merchant_id,
         customer_id=trigger.customer_id,
+        suppression_key=trigger.suppression_key,
         facts=facts,
         is_placeholder=is_placeholder,
     )

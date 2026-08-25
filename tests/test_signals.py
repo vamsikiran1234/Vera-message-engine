@@ -10,6 +10,7 @@ class SignalTests(unittest.TestCase):
             "id": "trg_1",
             "kind": "perf_dip",
             "merchant_id": "m_1",
+            "suppression_key": "perf:m_1:calls",
             "payload": {"placeholder": True, "metric_or_topic": "perf_dip", "metric": "calls"},
             "urgency": 3,
         })
@@ -17,6 +18,7 @@ class SignalTests(unittest.TestCase):
         normalized = normalize_trigger(trigger)
 
         self.assertTrue(normalized.is_placeholder)
+        self.assertEqual(normalized.suppression_key, "perf:m_1:calls")
         self.assertEqual(normalized.facts, {"metric": "calls"})
 
     def test_perf_dip_extracts_trigger_and_merchant_evidence(self):
