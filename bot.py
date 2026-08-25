@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from vera_engine.engine import DecisionEngine, action_to_dict
 from vera_engine.models import ContextEnvelope
 from vera_engine.replies import handle_reply, reply_result_to_dict
+from vera_engine.observability import DecisionLogger
 from vera_engine.store import ContextStore, ConversationStore, InvalidScopeError, SuppressionStore, utc_now
 
 
@@ -21,6 +22,7 @@ app = FastAPI(title="Vera Message Engine")
 context_store = ContextStore()
 conversation_store = ConversationStore()
 suppression_store = SuppressionStore()
+decision_logger = DecisionLogger()
 
 
 class ContextRequest(BaseModel):
@@ -104,7 +106,7 @@ def push_context(body: ContextRequest) -> dict[str, Any]:
 
 @app.post("/v1/tick")
 def tick(body: TickRequest) -> dict[str, list[Any]]:
-    engine = DecisionEngine(context_store, conversation_store, suppression_store)
+    engine = DecisionEngine(context_store, conversation_store, suppression_store, decision_logger)
     actions = []
     for trigger_id in body.available_triggers:
         if len(actions) >= 20:
