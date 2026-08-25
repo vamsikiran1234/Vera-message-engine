@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from vera_engine.engine import DecisionEngine, action_to_dict
 from vera_engine.models import ContextEnvelope
+from vera_engine.replies import handle_reply, reply_result_to_dict
 from vera_engine.store import ContextStore, ConversationStore, InvalidScopeError, SuppressionStore, utc_now
 
 
@@ -116,15 +117,14 @@ def tick(body: TickRequest) -> dict[str, list[Any]]:
 
 @app.post("/v1/reply")
 def reply(body: ReplyRequest) -> dict[str, Any]:
-    state = conversation_store.get_or_create(body.conversation_id, body.merchant_id, body.customer_id)
-    if not state.terminal:
-        conversation_store.add_turn(
-            body.conversation_id,
-            {
-                "from": body.from_role,
-                "body": body.message,
-                "received_at": body.received_at,
-                "turn_number": body.turn_number,
-            },
-        )
-    return {"action": "wait", "wait_seconds": 0, "rationale": "Reply recorded; conversation decision logic is not enabled yet."}
+    result = handle_reply(
+        body.conversation_id,
+        body.message,
+        conversation_store,
+        suppression_store,
+        body.merchant_id,
+        body.customer_id,
+        body.received_at,
+        body.turn_number,
+    )
+    return reply_result_to_dict(result)
