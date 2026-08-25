@@ -18,6 +18,10 @@ class ScoringWeights:
     customer_relevance: float = 0.10
     urgency: float = 0.10
     specificity: float = 0.05
+    merchant_relevance: float = 0.05
+    offer_compatibility: float = 0.05
+    conversation_continuity: float = 0.05
+    evidence_strength: float = 0.05
 
 
 @dataclass(frozen=True)
@@ -46,6 +50,10 @@ def score_candidate(
         "customer_relevance": 1.0 if customer and trigger.scope == "customer" else 0.0,
         "urgency": _bounded(trigger.urgency / 5),
         "specificity": _bounded((signal.specificity if signal else 0) / 4),
+        "merchant_relevance": _bounded(len(candidate.merchant_evidence) / 3),
+        "offer_compatibility": _bounded(len(candidate.offer_evidence) / 2),
+        "conversation_continuity": _bounded(len(candidate.conversation_evidence) / 2),
+        "evidence_strength": _bounded((len(candidate.evidence) + len(candidate.category_evidence) + len(candidate.merchant_evidence)) / 5),
     }
     score = sum(components[name] * getattr(weights, name) for name in components)
     return ScoredCandidate(candidate=candidate, score=round(score, 6), components=components)

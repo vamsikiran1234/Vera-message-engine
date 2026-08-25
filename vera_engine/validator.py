@@ -48,7 +48,7 @@ def validate_message(
 
     if body.count("?") > 1:
         reasons.append("multiple_cta_questions")
-    if cta and cta not in body_lower and cta not in {"none", "view", "reply"}:
+    if cta not in {"", "none", "view", "reply"} and not _cta_intent_present(body_lower, cta):
         reasons.append("cta_not_reflected")
 
     if previous_bodies and body in previous_bodies:
@@ -99,3 +99,14 @@ def _collect_strings(value: Any, output: set[str]) -> None:
 
 def _factual_tokens(body: str) -> list[str]:
     return [token.casefold() for token in re.findall(r"\d+(?:\.\d+)?", body)]
+
+
+def _cta_intent_present(body_lower: str, cta: str) -> bool:
+    intents = {
+        "confirm": ("confirm", "should i", "want me to prepare", "shall i prepare"),
+        "approve": ("approve", "should i", "want me to proceed"),
+        "promote": ("promote", "promotion"),
+        "send": ("send", "draft"),
+        "book": ("book", "booking", "reserve"),
+    }
+    return any(marker in body_lower for marker in intents.get(cta, (cta,)))

@@ -58,12 +58,17 @@ def _render_merchant(
             body += f": {title}"
         segment = item.get("patient_segment") if isinstance(item, dict) else None
         if segment == "high_risk_adults":
-            count = merchant.customer_aggregate.get("high_risk_adult_count")
+            count = plan.facts.get("high_risk_adult_count") or merchant.customer_aggregate.get("high_risk_adult_count")
             if count:
                 body += f" Your roster includes {count} high-risk adult patients"
         if source:
             body += f" ({source})"
-        cta = "Want me to pull the source and draft a patient message?" if trigger.kind == "research_digest" else "Want me to prepare the next step?"
+        if trigger.kind == "research_digest":
+            cta = "Want me to pull the source and draft a patient message?"
+        elif plan.cta == "confirm":
+            cta = "Should I prepare the compliance checklist?"
+        else:
+            cta = "Want me to prepare the next step?"
         return f"{body}. {cta}", [owner, title or "", source or ""]
     if trigger.kind in {"perf_dip", "seasonal_perf_dip"}:
         performance = facts.get("performance", {})
