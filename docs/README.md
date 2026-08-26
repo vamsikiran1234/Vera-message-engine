@@ -51,7 +51,7 @@ python -m compileall -q bot.py vera_engine tests
 python dataset/generate_dataset.py --seed-dir dataset --out expanded
 ```
 
-The local judge requires an LLM provider for scoring. See `docs/judge-setup.md` for secret-safe Gemini or Groq configuration.
+The local judge requires an LLM provider for scoring. See `docs/judge-setup.md` for Gemini configuration.
 
 ## Environment
 
