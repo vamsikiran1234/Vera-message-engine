@@ -3,3 +3,11 @@ __pycache__/
 .venv/
 venv/
 .env
+
+# Temporary diagnostic/test scripts — never commit these
+_check_*.py
+_diagnose_*.py
+_spot_*.py
+_p*_analysis.py
+_p*_check.py
+_p*_debug*.py
