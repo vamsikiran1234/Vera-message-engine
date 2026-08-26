@@ -169,6 +169,18 @@ def _render_merchant(
         )
         topic = str(topic).replace("_", " ")
         merchant_msg = facts.get("merchant_last_message")
+        artifact = facts.get("artifact_skeleton", "")
+        merchant_confirms = facts.get("merchant_confirms", False)
+
+        if merchant_confirms and artifact:
+            # Fix 1: merchant already confirmed — show the grounded structure,
+            # then ask for a lightweight refinement rather than asking to start.
+            return (
+                f"{sal}, here is a starting structure for the {topic}:\n\n"
+                f"{artifact}\n\n"
+                f"Want me to flesh this out into a shareable draft?",
+                [owner, topic],
+            )
         if merchant_msg:
             return (
                 f"{sal}, you said: \"{merchant_msg}\" — I am ready to draft the {topic} now. "
@@ -288,6 +300,16 @@ def _render_merchant(
         )
         topic = str(topic).replace("_", " ")
         merchant_msg = facts.get("merchant_last_message")
+        artifact = facts.get("artifact_skeleton", "")
+        merchant_confirms = facts.get("merchant_confirms", False)
+
+        if merchant_confirms and artifact:
+            return (
+                f"{sal}, here is a starting structure for the {topic}:\n\n"
+                f"{artifact}\n\n"
+                f"Want me to flesh this out into a shareable draft?",
+                [owner, topic],
+            )
         if merchant_msg:
             return (
                 f"{sal}, you said: \"{merchant_msg}\" — I am ready to draft the {topic} now. "
@@ -383,6 +405,133 @@ def _render_event(
 # Specialised render helpers
 # ---------------------------------------------------------------------------
 
+def _render_seasonal_digest(
+    sal: str,
+    category: CategoryContext,
+    merchant: MerchantContext,
+    facts: dict[str, Any],
+    item: dict[str, Any],
+    title: str | None,
+    source: str | None,
+    actionable: str | None,
+    owner: str,
+) -> tuple[str, list[str]]:
+    """Render a seasonal digest item that was selected as a competing opportunity
+    when a distant festival trigger fired.
+
+    Rules:
+    - Frame the seasonal window as the context, not as a 'category update'.
+    - Use the digest title as the insight anchor.
+    - Derive a natural CTA from the actionable field — never embed it verbatim.
+    - Name the merchant; reference the offer if one is present in facts.
+    - Single CTA question at the end.
+    - No internal vocabulary.
+    """
+    offer = facts.get("offer", {})
+    offer_title = offer.get("title") if isinstance(offer, dict) else None
+
+    # Build the seasonal insight sentence from the digest title.
+    # Keep only the first clause — strip the sub-clause after any dash separator.
+    # The JSON contains a mojibake em-dash stored as the three-character sequence
+    # â€" (U+00E2 U+20AC U+201D), which is the UTF-8 bytes of U+2014 mis-decoded
+    # as Windows-1252. We also handle a real em-dash and spaced hyphens.
+    insight = title or ""
+    _DASH_VARIANTS = ("â\u20ac\u201d", "\u2014", " \u2013 ", " - ", " -- ")
+    for _sep in _DASH_VARIANTS:
+        if _sep in insight:
+            insight = insight.split(_sep)[0].strip()
+            break
+
+    # Build a natural CTA derived from the actionable field.
+    # The actionable field contains operator-level guidance — we translate it into
+    # a merchant-facing offer rather than quoting it.
+    if actionable:
+        # actionable examples:
+        # "Run a 'Bridal Trial @ ₹999' offer; book 2-month skincare package"
+        # "Push the 'Bridal Trial @ ₹999' offer"
+        # Use the offer title from facts if available (it's grounded), otherwise
+        # extract the first offer-like phrase from actionable (up to first semicolon).
+        if offer_title:
+            cta = f"Want me to draft a campaign around your {offer_title} offer for this window?"
+        else:
+            # Extract a compact offer hint from actionable — take everything before
+            # the first semicolon or period to avoid multi-clause verbatim paste.
+            hint = re.split(r"[;.]", actionable)[0].strip()
+            # Remove leading imperative verbs ("Run a", "Push the", "Add") to make
+            # it sound like an observation rather than a system instruction.
+            hint = re.sub(r"^(run a|push the|push|add one?|add|consider|use)\s+", "", hint, flags=re.IGNORECASE)
+            cta = f"Want me to draft a {hint} plan for this window?"
+    else:
+        if offer_title:
+            cta = f"Want me to draft a campaign around your {offer_title} offer for this window?"
+        else:
+            cta = "Want me to draft a plan for this window?"
+
+    # Compose the body: seasonal context sentence + optional source credit.
+    # Fix 4: prefer grounded merchant/category evidence over the generic source.
+    # Priority for the why-now anchor:
+    #   1. Category seasonal beat baseline count (e.g. "4× baseline") — grounded
+    #   2. Prior conversation search signal (e.g. "+28% bridal searches in Kapra")
+    #   3. Source citation — only when it is specific (not a generic label)
+    why_now = ""
+
+    # Try seasonal beats for a quantified baseline
+    for beat in category.seasonal_beats:
+        note = str(beat.get("note", ""))
+        note_lower = note.casefold()
+        # Look for any note that mentions the insight topic and has a number
+        import re as _re_fix4
+        if _re_fix4.search(r"\d", note) and any(
+            kw in note_lower for kw in ("bridal", "wedding", "festival", "season", "baseline")
+        ):
+            why_now = note
+            break
+
+    # Try prior Vera conversation for a search signal (e.g. "+28% bridal searches")
+    if not why_now:
+        for turn in merchant.conversation_history:
+            body_text = str(turn.get("body", ""))
+            if _re_fix4.search(r"\d+%", body_text) and any(
+                kw in body_text.casefold() for kw in ("search", "bridal", "wedding", "demand", "inquiry")
+            ):
+                # Extract the first quoted stat-like phrase from the Vera message
+                # to use as the why-now anchor
+                m = _re_fix4.search(r"[\w\s]+ \+?(\d+)%[\w\s]+", body_text)
+                if m:
+                    start = max(0, m.start() - 10)
+                    why_now = body_text[start: m.end()].strip().lstrip("- ,")
+                break
+
+    # Fall back to source only when it's specific (not generic industry label)
+    generic_sources = {"wedding industry intel", "magicpin internal", "internal data"}
+    source_is_specific = source and source.casefold() not in generic_sources
+
+    # Fix 1: strip mojibake em-dash from the why_now string before rendering.
+    # The seasonal beat note has the same UTF-8-mis-decoded dash as the title.
+    if why_now:
+        for _sep in _DASH_VARIANTS:
+            if _sep in why_now:
+                # Keep the part that contains the quantified fact (after the dash
+                # when the number is there, before it otherwise).
+                parts = why_now.split(_sep, 1)
+                # Pick whichever part contains a digit
+                import re as _re_enc
+                why_now = next(
+                    (p.strip() for p in parts if _re_enc.search(r"\d", p)),
+                    parts[0].strip(),
+                )
+                break
+
+    if why_now:
+        body = f"{sal}, {insight}. {why_now}."
+    elif source_is_specific:
+        body = f"{sal}, {insight} ({source})."
+    else:
+        body = f"{sal}, {insight}."
+
+    return f"{body} {cta}", [owner, insight, offer_title or ""]
+
+
 def _render_digest(
     sal: str,
     category: CategoryContext,
@@ -396,7 +545,17 @@ def _render_digest(
     source = item.get("source") if isinstance(item, dict) else None
     actionable = item.get("actionable") if isinstance(item, dict) else None
     item_date = item.get("date") if isinstance(item, dict) else None
+    item_kind = item.get("kind") if isinstance(item, dict) else None
+    owner = str(merchant.identity.get("owner_first_name") or "")
 
+    # --- festival_upcoming + seasonal digest competitor (Phase 5) ---
+    # The competing candidate is a current-window seasonal opportunity.
+    # Use the digest title to frame the seasonal context, and derive
+    # a natural CTA from the actionable field — never embed it verbatim.
+    if trigger.kind == "festival_upcoming":
+        return _render_seasonal_digest(sal, category, merchant, facts, item, title, source, actionable, owner)
+
+    # --- Standard digest body ---
     body = f"{sal}, a relevant {category.slug} update landed"
     if title:
         body += f": {title}"
@@ -428,18 +587,11 @@ def _render_digest(
             cta = "Want me to add it to your calendar and draft a reminder?"
     elif trigger.kind == "research_digest":
         cta = "Want me to pull the source and draft a patient message?"
-    elif trigger.kind == "festival_upcoming":
-        # Competing seasonal digest candidate — current-window opportunity
-        if actionable:
-            cta = f"{actionable} Want me to act on this now?"
-        else:
-            cta = "Want me to act on this seasonal opportunity now?"
     elif plan.cta == "confirm":
         cta = "Should I prepare the compliance checklist?"
     else:
         cta = "Want me to prepare the next step?"
 
-    owner = str(merchant.identity.get("owner_first_name") or "")
     return f"{body}. {cta}", [owner, title or "", source or ""]
 
 
@@ -492,26 +644,47 @@ def _render_perf_spike(
     metric = trigger.facts.get("metric")
     delta = trigger.facts.get("delta_pct")
     peer_sentence = _peer_ctr_sentence(facts)
+    seasonal_strategy = facts.get("seasonal_strategy", "neutral")
+    driver_label = facts.get("spike_driver_label", "")
 
-    # Grammar fix: "calls" is a count noun, not a rate noun — use "count" suffix
     metric_label = _metric_display(metric)
 
     if metric and delta is not None:
         body = f"{sal}, your {metric_label} is up {_percent(delta)} this week"
+
+        # Fix 2: add grounded likely-driver context (preserves 'likely' uncertainty)
+        if driver_label:
+            body += f", likely following {driver_label}"
+
         if peer_sentence:
             body += f". {peer_sentence.capitalize()}"
+
         if offer_title:
             body += f". Your active offer is {offer_title}"
-        return f"{body}. Want me to prepare a promotion to capitalise on this?", [sal, metric_label, _percent(delta)]
 
-    # Fallback: use category voice term for "demand" rather than the slug
+        # Fix 3: seasonal strategy awareness
+        # In a retention-focused season, steer toward converting existing inquiries
+        # rather than a broad acquisition promotion.
+        if seasonal_strategy == "retention":
+            cta = "Want me to draft a follow-up for the people who called this week?"
+        elif offer_title:
+            cta = "Want me to prepare a promotion to capitalise on this?"
+        else:
+            cta = "Want me to prepare a plan to capitalise on this?"
+
+        return f"{body}. {cta}", [sal, metric_label, _percent(delta)]
+
+    # Fallback
     demand_noun = _category_demand_noun(category.slug)
     detail = f" Your active offer is {offer_title}." if offer_title else ""
     if peer_sentence:
         detail = f" {peer_sentence.capitalize()}.{detail}"
+    if seasonal_strategy == "retention":
+        cta = "Want me to draft a follow-up to convert current inquiries?"
+    else:
+        cta = "Want me to prepare a promotion?"
     return (
-        f"{sal}, {demand_noun} is up this week.{detail} "
-        f"Want me to prepare a promotion?",
+        f"{sal}, {demand_noun} is up this week.{detail} {cta}",
         [sal, offer_title or ""],
     )
 

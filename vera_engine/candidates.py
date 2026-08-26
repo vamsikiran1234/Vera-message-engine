@@ -355,16 +355,45 @@ def generate_candidates(
             spike_facts.update(_performance_actuals(merchant, metric))
             if offer:
                 spike_facts["offer"] = offer
+
+            # Fix 2: thread likely_driver as natural language (preserve uncertainty)
+            raw_driver = trigger.facts.get("likely_driver")
+            if raw_driver:
+                spike_facts["spike_driver_label"] = _translate_likely_driver(raw_driver)
+
+            # Fix 2: thread relevant conversation context (last merchant-sent turn)
+            for turn in reversed(merchant.conversation_history):
+                if str(turn.get("from", "")).casefold() != "vera":
+                    spike_facts["relevant_conversation"] = str(turn.get("body", ""))[:120]
+                    break
+
+            # Fix 3: surface the current seasonal strategy from category beats
+            strategy = _seasonal_strategy(category)
+            spike_facts["seasonal_strategy"] = strategy
+
+            # Fix 3: thread the matching seasonal beat note when strategy is non-acquisition
+            if strategy != "acquisition":
+                for beat in category.seasonal_beats:
+                    note = str(beat.get("note", "")).casefold()
+                    if any(kw in note for kw in ("retention", "lowest", "focus on")):
+                        spike_facts["seasonal_beat_note"] = beat.get("note", "")
+                        break
+
+            # CTA: retention season → 'send' (follow-up draft); acquisition/neutral → 'promote'
+            spike_cta = "send" if strategy == "retention" else ("promote" if offer else "view")
+
             candidates.append(CandidateAction(
                 objective="capitalize_on_demand",
                 action_type="recommend" if offer else "inform",
-                cta="promote" if offer else "view",
+                cta=spike_cta,
                 primary_signal=signal_name,
                 evidence=by_name[signal_name].evidence,
                 facts=spike_facts,
                 priority_hint=75 if offer else 50,
                 trigger_evidence=by_name[signal_name].evidence,
+                merchant_evidence=tuple(merchant.signals),
                 offer_evidence=(str(offer.get("title")),) if offer else (),
+                conversation_evidence=recent_history,
             ))
 
     if trigger.kind in {"supply_alert", "review_theme_emerged", "competitor_opened", "gbp_unverified", "renewal_due", "milestone_reached", "dormant_with_vera", "festival_upcoming", "active_planning_intent", "curious_ask_due", "winback_eligible"}:
@@ -510,8 +539,23 @@ def generate_candidates(
         }
         if trigger.facts.get("intent_topic"):
             intent_facts["intent_topic"] = trigger.facts["intent_topic"]
-        if trigger.facts.get("merchant_last_message"):
-            intent_facts["merchant_last_message"] = trigger.facts["merchant_last_message"]
+        merchant_last = trigger.facts.get("merchant_last_message")
+        if merchant_last:
+            intent_facts["merchant_last_message"] = merchant_last
+            # Fix 1: detect confirmed intent — if the merchant already said yes,
+            # flag it so the template produces an artifact, not another question.
+            intent_facts["merchant_confirms"] = _is_confirmed_intent(merchant_last)
+
+        # Fix 1: thread grounded artifact skeleton when intent is confirmed
+        if intent_facts.get("merchant_confirms"):
+            skeleton = _grounded_artifact_skeleton(
+                trigger.facts.get("intent_topic", ""),
+                merchant,
+                offer,
+            )
+            if skeleton:
+                intent_facts["artifact_skeleton"] = skeleton
+
         candidates.append(CandidateAction(
             objective="prepare_content",
             action_type="recommend",
@@ -572,3 +616,149 @@ def _cta_for_kind(kind: str) -> str:
         "curious_ask_due": "reply",
         "winback_eligible": "approve",
     }.get(kind, "reply")
+
+
+# ---------------------------------------------------------------------------
+# Fix 1 helpers — confirmed planning intent
+# ---------------------------------------------------------------------------
+
+_CONFIRMATION_MARKERS: frozenset[str] = frozenset({
+    "yes", "yes good", "yes good idea", "good idea", "go ahead",
+    "let's do it", "lets do it", "sounds good", "great idea",
+    "proceed", "please proceed", "ok let's", "ok lets", "sure",
+    "do it", "perfect", "makes sense", "agreed",
+})
+
+
+def _is_confirmed_intent(merchant_last_message: str) -> bool:
+    """Return True when the merchant's last message is an explicit confirmation.
+
+    Conservative — only marks as confirmed when the evidence is unambiguous,
+    to avoid producing a premature artifact for ambiguous replies.
+    """
+    if not merchant_last_message:
+        return False
+    text = " ".join(merchant_last_message.casefold().split())
+    if text in _CONFIRMATION_MARKERS:
+        return True
+    for marker in _CONFIRMATION_MARKERS:
+        if text.startswith(marker):
+            return True
+    return False
+
+
+def _grounded_artifact_skeleton(
+    intent_topic: str,
+    merchant: MerchantContext,
+    offer: "dict[str, Any] | None",
+) -> str:
+    """Return a grounded artifact skeleton using only facts from the context.
+
+    Uses active offer titles already present in MerchantContext.offers.
+    Never invents prices, delivery times, or capabilities.
+    Returns '' when no useful skeleton can be grounded.
+    """
+    topic = (intent_topic or "").casefold().replace("_", " ")
+    active_offers = [
+        o for o in merchant.offers
+        if str(o.get("status", "")).casefold() == "active" and o.get("title")
+    ]
+
+    if any(kw in topic for kw in ("corporate", "bulk", "office", "enterprise", "group")):
+        if active_offers:
+            base = active_offers[0]["title"]
+            return (
+                f"Corporate lunch package — draft structure:\n"
+                f"- Base unit: {base}\n"
+                f"- Bulk-order pricing: to be confirmed\n"
+                f"- Minimum order: to be confirmed\n"
+                f"- Delivery window: to be confirmed\n"
+                f"- How to order: WhatsApp the day before"
+            )
+        return ""
+
+    if any(kw in topic for kw in ("bridal", "wedding", "bride")):
+        if active_offers:
+            base = active_offers[0]["title"]
+            return (
+                f"Bridal package — draft structure:\n"
+                f"- Base service: {base}\n"
+                f"- Add-on options: to be confirmed from your menu\n"
+                f"- Trial session: to be confirmed\n"
+                f"- Booking lead time: to be confirmed"
+            )
+        return ""
+
+    # Generic planning artifact
+    if active_offers:
+        base = active_offers[0]["title"]
+        return (
+            f"Draft structure — starting point: {base}\n"
+            f"- Pricing: to be confirmed\n"
+            f"- Availability: to be confirmed\n"
+            f"- Logistics: to be confirmed"
+        )
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# Fix 2 / 3 helpers — perf_spike driver translation + seasonal strategy
+# ---------------------------------------------------------------------------
+
+_DRIVER_LABELS: dict[str, str] = {
+    "kids_yoga_post": "your recent kids-yoga post",
+    "kids_yoga": "the kids-yoga content",
+    "ipl_post": "your IPL promotion post",
+    "festival_post": "your recent festival post",
+    "gbp_update": "your recent Google Business Profile update",
+    "offer_post": "your active offer post",
+    "instagram_post": "a recent Instagram post",
+    "google_post": "a recent Google post",
+    "walk_in_tag": "the walk-in availability tag on your profile",
+    "bridal_post": "your bridal content",
+    "referral": "word-of-mouth referrals",
+    "organic": "organic search growth",
+}
+
+
+def _translate_likely_driver(raw: str) -> str:
+    """Translate a raw likely_driver value to a natural merchant-facing phrase.
+
+    Preserves the 'likely' uncertainty — never says 'caused by'.
+    Returns '' when no translation is available.
+    """
+    key = (raw or "").casefold().replace("-", "_").replace(" ", "_")
+    label = _DRIVER_LABELS.get(key)
+    if label:
+        return label
+    if "_" in key or key.isalpha():
+        return raw.replace("_", " ").replace("-", " ")
+    return ""
+
+
+_RETENTION_SEASON_KEYWORDS: frozenset[str] = frozenset({
+    "retention", "lowest acquisition", "focus on retention",
+    "not acquisition", "churn", "slowdown", "lowest",
+})
+
+_ACQUISITION_SEASON_KEYWORDS: frozenset[str] = frozenset({
+    "acquisition", "walk-in", "trial", "surge", "peak", "convert window",
+    "new member", "new client", "onboarding",
+})
+
+
+def _seasonal_strategy(category: CategoryContext) -> str:
+    """Return 'retention', 'acquisition', or 'neutral' based on category seasonal beats.
+
+    Uses keyword scan — does NOT hard-code months.  Returns 'neutral' when
+    the beats are ambiguous or absent.
+    """
+    for beat in category.seasonal_beats:
+        note = str(beat.get("note", "")).casefold()
+        if any(kw in note for kw in _RETENTION_SEASON_KEYWORDS):
+            return "retention"
+    for beat in category.seasonal_beats:
+        note = str(beat.get("note", "")).casefold()
+        if any(kw in note for kw in _ACQUISITION_SEASON_KEYWORDS):
+            return "acquisition"
+    return "neutral"

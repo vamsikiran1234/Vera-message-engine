@@ -48,11 +48,15 @@ class OpportunityTests(unittest.TestCase):
 
         self.assertIsNotNone(action)
         # The engine should select the most relevant current opportunity.
-        # For a festival 188 days away with a stronger current seasonal signal,
-        # the action should be grounded in the available context (Diwali or
-        # the current seasonal digest item) rather than a generic fallback.
+        # With a distant festival and a live seasonal digest item, the action
+        # should be grounded in the salon category context.
+        body_lower = action.body.lower()
         self.assertTrue(
-            "Diwali" in action.body or "salons" in action.body or "salon" in action.body.lower(),
+            "diwali" in body_lower
+            or "salon" in body_lower
+            or "bridal" in body_lower
+            or "wedding" in body_lower
+            or "haircut" in body_lower,
             f"Expected a salon-specific action, got: {action.body}",
         )
         # Must NOT be the generic "I found a signal" fallback
