@@ -215,10 +215,10 @@ def _render_merchant(
                 [owner, topic],
             )
         if merchant_msg:
+            # Fix 9B: frame as follow-up rather than verbatim echo to avoid garbled quotes
             return (
-                f"{sal}, you said: \"{merchant_msg}\" — I am ready to draft the {topic} now. "
-                f"{cta}",
-                [owner, topic, str(merchant_msg)],
+                f"{sal}, following your note on {topic} — I’m ready to draft a first version now. {cta}",
+                [owner, topic],
             )
         return (
             f"{sal}, I can continue the {topic} plan from your earlier request. "
@@ -344,10 +344,10 @@ def _render_merchant(
                 [owner, topic],
             )
         if merchant_msg:
+            # Fix 9B: frame as follow-up rather than verbatim echo to avoid garbled quotes
             return (
-                f"{sal}, you said: \"{merchant_msg}\" — I am ready to draft the {topic} now. "
-                f"Want me to start with a first version you can edit?",
-                [owner, topic, str(merchant_msg)],
+                f"{sal}, following your note on {topic} — I’m ready to draft a first version now. Want me to start?",
+                [owner, topic],
             )
         return (
             f"{sal}, I can continue the {topic} plan from your earlier request. "
@@ -364,17 +364,28 @@ def _render_merchant(
     if trigger.kind == "dormant_with_vera":
         days = facts.get("days_since_last_merchant_message") or facts.get("days_inactive")
         peer_ctr_str = _peer_ctr_sentence(facts)
-        detail = f"in {days} days" if days is not None else "recently"
-        if peer_ctr_str:
+        # Fix 9B: guard None days — only include duration when it is a real number
+        if days is not None:
+            detail = f"in {days} days"
+        else:
+            detail = "recently"
+        if peer_ctr_str and days is not None:
             return (
                 f"{sal}, we have not spoken {detail}. Meanwhile, {peer_ctr_str}. "
                 f"Want me to share one growth idea to act on this week?",
-                [owner, str(days or "")],
+                [owner, str(days)],
             )
+        if days is not None:
+            return (
+                f"{sal}, we have not spoken {detail}. "
+                f"Want me to share one growth idea for your business this week?",
+                [owner, str(days)],
+            )
+        # No duration known — give a general re-engagement message
         return (
-            f"{sal}, we have not spoken {detail}. "
-            f"Want me to share one growth idea for your business this week?",
-            [owner, str(days or "")],
+            f"{sal}, it has been a while since we last connected. "
+            f"Want me to share one useful growth idea for this week?",
+            [owner, ""],
         )
 
     # Generic fallback — still clean, no internal vocabulary
@@ -589,6 +600,13 @@ def _render_digest(
         return _render_seasonal_digest(sal, category, merchant, facts, item, title, source, actionable, owner)
 
     # --- Standard digest body ---
+    # Fix 2: strip mojibake em-dash from title before embedding
+    if title:
+        _DASH_VARIANTS_D = ("â\u20ac\u201d", "\u2014", " \u2013 ", " - ", " -- ")
+        for _sep in _DASH_VARIANTS_D:
+            if _sep in title:
+                title = title.split(_sep)[0].strip()
+                break
     body = f"{sal}, a relevant {category.slug} update landed"
     if title:
         body += f": {title}"
@@ -657,8 +675,21 @@ def _render_perf_dip(
 
     if metric and delta is not None:
         body = f"{sal}, your {metric_label} {metric_verb} down {_percent(delta)}"
+        # Fix 5: add absolute current value + baseline when grounded in context
+        perf_actuals = facts.get("performance_actuals", {})
+        current_value = perf_actuals.get("current_value")
+        vs_baseline   = perf_actuals.get("vs_baseline")
+        if current_value is not None and vs_baseline is not None:
+            body += f" — currently {current_value} vs a {vs_baseline} baseline"
+        elif current_value is not None:
+            body += f" — currently at {current_value} this month"
         if peer_sentence:
             body += f". {peer_sentence.capitalize()}"
+        # Fix 7: add evidence_signals[0] as fallback when peer_ctr not available
+        elif not peer_sentence:
+            signals_list = facts.get("evidence_signals", [])
+            if signals_list:
+                body += f". {str(signals_list[0]).capitalize()}"
         return f"{body}. Want me to review the next action?", [sal, metric_label, _percent(delta)]
 
     return f"{sal}, there is a performance dip worth reviewing. Want me to prepare options?", [sal]
@@ -751,19 +782,27 @@ def _render_festival_upcoming(sal: str, facts: dict[str, Any]) -> tuple[str, lis
     offer = facts.get("offer", {})
     title = offer.get("title") if isinstance(offer, dict) else None
 
+    if not festival:
+        # No festival name available — skip generic "upcoming occasion" message
+        return (
+            f"{sal}, a seasonal opportunity is coming up for your category. "
+            f"Want me to prepare a campaign idea?",
+            [sal],
+        )
+
     timing = ""
     if days_until is not None:
         timing = f" in {days_until} days"
     elif date:
         timing = f" on {date}"
 
-    detail = f"{festival}{timing}" if festival else f"an upcoming occasion{timing}"
+    detail = f"{festival}{timing}"
     offer_note = f" Your active offer, {title}, fits well." if title else ""
 
     return (
         f"{sal}, {detail} is coming up.{offer_note} "
         f"Want me to prepare one category-fit campaign idea?",
-        [sal, str(festival or ""), str(date or "")],
+        [sal, str(festival), str(date or "")],
     )
 
 
@@ -787,23 +826,23 @@ def _render_curious_ask(
         trend_pct = f"{abs(top_delta) * 100:g}%"
         body = (
             f"{sal}, searches for '{top_query}' are up {trend_pct} in your category. "
-            f"Reply with the service or product you want to push this week and I’ll shape the next step."
+            f"Which service has been most asked for at your place this week?"
         )
-        return f"{body}", [sal, top_query, trend_pct]
+        cta = "Reply back and I’ll draft a Google post + a ready-to-share note around your answer."
+        return f"{body} {cta}", [sal, top_query, trend_pct]
 
     if merchant_views is not None and peer_views is not None:
         body = (
             f"{sal}, your profile had {merchant_views} views this month "
             f"(category average is {peer_views}). "
-            f"Reply with the service or product you want to push this week and I’ll shape the next step."
+            f"Which service has been most asked for this week?"
         )
-        return f"{body}", [sal, str(merchant_views), str(peer_views)]
+        cta = "Reply back and I’ll draft a Google post around your answer."
+        return f"{body} {cta}", [sal, str(merchant_views), str(peer_views)]
 
-    body = (
-        f"{sal}, reply with the service or product that has been most asked for "
-        f"at your {category.slug} this week and I’ll shape the next step."
-    )
-    return f"{body}", [sal, category.slug]
+    body = f"{sal}, which service or product has been most asked for at your {category.slug} this week?"
+    cta = "Reply back and I’ll draft a Google post + a ready-to-use customer reply."
+    return f"{body} {cta}", [sal, category.slug]
 
 
 def _render_winback(

@@ -609,7 +609,7 @@ def _cta_for_kind(kind: str) -> str:
         "competitor_opened": "view",
         "gbp_unverified": "confirm",
         "renewal_due": "confirm",
-        "milestone_reached": "approve",
+        "milestone_reached": "send",
         "dormant_with_vera": "reply",
         "festival_upcoming": "approve",
         "active_planning_intent": "send",

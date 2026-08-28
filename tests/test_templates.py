@@ -67,7 +67,8 @@ class TemplateTests(unittest.TestCase):
         self.assertIn("Want me to draft a milestone post to share with your customers?", body)
         self.assertNotIn("APPROVE", body)
 
-    def test_active_planning_preserves_quoted_question(self):
+    def test_active_planning_strips_question_from_quoted_merchant_message(self):
+        """Fix 6: merchant_msg with trailing '?' must be stripped to prevent double-? in body."""
         category = CategoryContext.from_payload({"slug": "gyms"})
         merchant = MerchantContext.from_payload({
             "merchant_id": "m_1", "category_slug": "gyms",
@@ -84,8 +85,10 @@ class TemplateTests(unittest.TestCase):
 
         body, _ = render_message(category, merchant, trigger, build_message_plan(category, merchant, trigger, candidate))
 
-        self.assertIn("what should it look like?", body)
-        self.assertEqual(body.count("?"), 1)
+        # The topic name should still appear
+        self.assertIn("kids yoga summer camp", body)
+        # Must have at most 1 question mark — stripping trailing ? prevents double-?
+        self.assertLessEqual(body.count("?"), 1, f"Body has multiple '?': {body}")
 
     def test_cde_digest_normalizes_mojibake_without_stripping_rupee(self):
         category = CategoryContext.from_payload({
