@@ -1,0 +1,174 @@
+[1mdiff --git a/vera_engine/templates.py b/vera_engine/templates.py[m
+[1mindex 5e2d5d9..020d408 100644[m
+[1m--- a/vera_engine/templates.py[m
+[1m+++ b/vera_engine/templates.py[m
+[36m@@ -17,6 +17,34 @@[m [mfrom .planner import MessagePlan[m
+from .signals import NormalizedTrigger[m
+
+
+[32m{+def _normalize_mojibake(value: str | None) -> str:+}[m
+[32m{+    if value is None:+}[m
+[32m{+        return ""+}[m
+[32m{+    text = str(value)+}[m
+[32m{+    replacements = {+}[m
+[32m{+        "â€\"": '"',+}[m
+[32m{+        "â€\u201d": '"',+}[m
+[32m{+        "â€“": "—",+}[m
+[32m{+        "â€”": "—",+}[m
+[32m{+        "â€˜": "'",+}[m
+[32m{+        "â€™": "'",+}[m
+[32m{+        "â€œ": '"',+}[m
+[32m{+        "â€": '"',+}[m
+[32m{+        "â‚¹": "₹",+}[m
+[32m{+        "Â₹": "₹",+}[m
+[32m{+        "Â": "",+}[m
+[32m{+        "Ã": "",+}[m
+[32m{+        "\u00e2\u20ac\u201d": '"',+}[m
+[32m{+        "\u00e2\u20ac\u2122": "™",+}[m
+[32m{+        "\u00c3\u20ac": "€",+}[m
+[32m{+    }+}[m
+[32m{+    for bad, good in replacements.items():+}[m
+[32m{+        text = text.replace(bad, good)+}[m
+[32m{+    for bad in ("â€", "\u00e2\u20ac", "Ã"):+}[m
+[32m{+        text = text.replace(bad, "")+}[m
+[32m{+    return text+}[m
+
+
+def render_message([m
+    category: CategoryContext,[m
+    merchant: MerchantContext,[m
+[36m@@ -25,8 +53,10 @@[m [mdef render_message([m
+    customer: CustomerContext | None = None,[m
+) -> tuple[str, list[str]]:[m
+    if customer and trigger.scope == "customer":[m
+        [31m[-return-][m[32m{+body, params =+}[m _render_customer(merchant, trigger, plan, customer)
+    [31m[-return-][m[32m{+else:+}[m
+[32m{+        body, params =+}[m _render_merchant(category, merchant, trigger, plan)
+    [32m{+return _normalize_mojibake(body), [_normalize_mojibake(value) for value in params]+}[m
+
+
+# ---------------------------------------------------------------------------[m
+[36m@@ -168,13 +198,16 @@[m [mdef _render_merchant([m
+            or "your requested plan"[m
+        )[m
+        topic = str(topic).replace("_", " ")[m
+        merchant_msg = [31m[-facts.get("merchant_last_message")-][m[32m{+_sanitize_single_question(facts.get("merchant_last_message"))+}[m
+        artifact = [31m[-facts.get("artifact_skeleton", "")-][m[32m{+_sanitize_single_question(facts.get("artifact_skeleton", ""))+}[m
+        merchant_confirms = facts.get("merchant_confirms", False)[m
+        [32m{+cta = (+}[m
+[32m{+            "Reply when you want me to start with a first version you can edit."+}[m
+[32m{+            if "?" in merchant_msg or "?" in artifact+}[m
+[32m{+            else "Want me to start with a first version you can edit?"+}[m
+[32m{+        )+}[m
+
+        if merchant_confirms and artifact:[m
+[31m[-            # Fix 1: merchant already confirmed — show the grounded structure,-][m
+[31m[-            # then ask for a lightweight refinement rather than asking to start.-][m
+            return ([m
+                f"{sal}, here is a starting structure for the {topic}:\n\n"[m
+                f"{artifact}\n\n"[m
+[36m@@ -184,7 +217,7 @@[m [mdef _render_merchant([m
+        if merchant_msg:[m
+            return ([m
+                f"{sal}, you said: \"{merchant_msg}\" — I am ready to draft the {topic} now. "[m
+                [31m[-f"Want me to start with a first version you can edit?",-][m[32m{+f"{cta}",+}[m
+                [owner, topic, str(merchant_msg)],[m
+            )[m
+        return ([m
+[36m@@ -605,30 +638,28 @@[m [mdef _render_perf_dip([m
+    performance = facts.get("performance", {})[m
+    metric = performance.get("metric") if isinstance(performance, dict) else None[m
+    delta = performance.get("delta_pct") if isinstance(performance, dict) else None[m
+
+[31m[-    # Use peer comparison when available for richer specificity-][m
+    peer_sentence = _peer_ctr_sentence(facts)[m
+    [32m{+season_note = trigger.facts.get("season_note", "").replace("_", " ")+}[m
+[32m{+    metric_label = _metric_display(metric)+}[m
+[32m{+    metric_verb = _metric_verb(metric)+}[m
+
+    if trigger.kind == "seasonal_perf_dip":[m
+[31m[-        # Reframe: this is expected — don't alarm-][m
+[31m[-        season_note = trigger.facts.get("season_note", "").replace("_", " ")-][m
+        if metric and delta is not None:[m
+            body = f"{sal}, your [31m[-{metric} is-][m[32m{+{metric_label} {metric_verb}+}[m down {_percent(delta)} this week"
+            if season_note:[m
+                body += f" — this is the normal {season_note} dip"[m
+            if peer_sentence:[m
+                body += f". {peer_sentence.capitalize()}"[m
+            body += ". No action needed on spend — focus on retaining current members."[m
+            return f"{body} Want me to draft a retention nudge?", [sal, [31m[-metric,-][m[32m{+metric_label,+}[m _percent(delta)]
+        body = f"{sal}, the current [31m[-{metric-][m[32m{+{metric_label+}[m or 'performance'} dip is seasonal and expected"
+        return f"{body}. Want me to draft a retention message for your active customers?", [sal][m
+
+[31m[-    # Regular perf_dip-][m
+    if metric and delta is not None:[m
+        body = f"{sal}, your [31m[-{metric} is-][m[32m{+{metric_label} {metric_verb}+}[m down {_percent(delta)}"
+        if peer_sentence:[m
+            body += f". {peer_sentence.capitalize()}"[m
+        return f"{body}. Want me to review the next action?", [sal, [31m[-metric,-][m[32m{+metric_label,+}[m _percent(delta)]
+
+    return f"{sal}, there is a performance dip worth reviewing. Want me to prepare options?", [sal][m
+
+[36m@@ -743,8 +774,7 @@[m [mdef _render_curious_ask([m
+    facts: dict[str, Any],[m
+) -> tuple[str, list[str]]:[m
+    """[m
+    Curious-ask template. No internal [31m[-vocabulary.  Uses category trend-][m[32m{+vocabulary+}[m and [32m{+a natural+}[m merchant [31m[-performance to make the question feel specific and valuable.-][m[32m{+reply CTA.+}[m
+    """[m
+    top_query = facts.get("top_trend_query")[m
+    top_delta = facts.get("top_trend_delta_yoy")[m
+[36m@@ -753,32 +783,27 @@[m [mdef _render_curious_ask([m
+    )[m
+    merchant_views = merchant.performance.get("views")[m
+
+[31m[-    # Build a context-specific prompt for the merchant-][m
+    if top_query and top_delta is not None:[m
+        trend_pct = f"{abs(top_delta) * 100:g}%"[m
+        body = ([m
+            f"{sal}, searches for '{top_query}' are up {trend_pct} in your category. "[m
+            [31m[-f"Quick check — which-][m[32m{+f"Reply with the+}[m service [31m[-has been most requested at your place-][m[32m{+or product you want to push+}[m this [31m[-week?"-][m[32m{+week and I’ll shape the next step."+}[m
+        )[m
+[31m[-cta = "I will turn your answer into a Google post and a ready-to-share customer note."-][m        return [31m[-f"{body} {cta}",-][m[32m{+f"{body}",+}[m [sal, top_query, trend_pct]
+
+    if merchant_views is not None and peer_views is not None:[m
+        body = ([m
+            f"{sal}, your profile had {merchant_views} views this month "[m
+            f"(category average is {peer_views}). "[m
+            [31m[-f"Quick check — which-][m[32m{+f"Reply with the+}[m service [31m[-has been most requested at your place-][m[32m{+or product you want to push+}[m this [31m[-week?"-][m[32m{+week and I’ll shape the next step."+}[m
+        )[m
+[31m[-cta = "I will turn your answer into a Google post."-][m        return [31m[-f"{body} {cta}",-][m[32m{+f"{body}",+}[m [sal, str(merchant_views), str(peer_views)]
+
+[31m[-    # Minimal grounded fallback-][m
+    body = ([m
+        f"{sal}, [31m[-quick check — which-][m[32m{+reply with the+}[m service or product [32m{+that+}[m has been most asked for "
+        f"at your {category.slug} this [31m[-week?"-][m[32m{+week and I’ll shape the next step."+}[m
+    )[m
+[31m[-cta = "I will turn your answer into a Google post and a ready-to-use customer reply."-][m    return [31m[-f"{body} {cta}",-][m[32m{+f"{body}",+}[m [sal, category.slug]
+
+
+def _render_winback([m
+[36m@@ -898,11 +923,24 @@[m [mdef _category_demand_noun(slug: str) -> str:[m
+    return _MAP.get(slug, f"demand for {slug}")[m
+
+def _salutation(category: CategoryContext, owner: str) -> str:[m
+    [32m{+owner = _normalize_mojibake(owner)+}[m
+    if category.slug == "dentists" and owner and not owner.casefold().startswith("dr"):[m
+        return f"Dr. {owner}"[m
+    return owner[m
+
+
+[32m{+def _sanitize_single_question(value: Any) -> str:+}[m
+[32m{+    if value is None:+}[m
+[32m{+        return ""+}[m
+[32m{+    text = str(value)+}[m
+[32m{+    sanitized = text.replace("\n", " ")+}[m
+[32m{+    return " ".join(sanitized.split())+}[m
+
+
+[32m{+def _metric_verb(metric: str | None) -> str:+}[m
+[32m{+    return "are" if metric in {"views", "directions", "leads"} else "is"+}[m
+
+
+def _peer_ctr_sentence(facts: dict[str, Any]) -> str:[m
+    """Return a grounded CTR comparison sentence, or '' if data is missing."""[m
+    merchant_ctr = facts.get("merchant_ctr") or facts.get("current_ctr")[m

@@ -17,6 +17,34 @@ from .planner import MessagePlan
 from .signals import NormalizedTrigger
 
 
+def _normalize_mojibake(value: str | None) -> str:
+    if value is None:
+        return ""
+    text = str(value)
+    replacements = {
+        "â€\"": '"',
+        "â€\u201d": '"',
+        "â€“": "—",
+        "â€”": "—",
+        "â€˜": "'",
+        "â€™": "'",
+        "â€œ": '"',
+        "â€": '"',
+        "â‚¹": "₹",
+        "Â₹": "₹",
+        "Â": "",
+        "Ã": "",
+        "\u00e2\u20ac\u201d": '"',
+        "\u00e2\u20ac\u2122": "™",
+        "\u00c3\u20ac": "€",
+    }
+    for bad, good in replacements.items():
+        text = text.replace(bad, good)
+    for bad in ("â€", "\u00e2\u20ac", "Ã"):
+        text = text.replace(bad, "")
+    return text
+
+
 def render_message(
     category: CategoryContext,
     merchant: MerchantContext,
@@ -25,8 +53,10 @@ def render_message(
     customer: CustomerContext | None = None,
 ) -> tuple[str, list[str]]:
     if customer and trigger.scope == "customer":
-        return _render_customer(merchant, trigger, plan, customer)
-    return _render_merchant(category, merchant, trigger, plan)
+        body, params = _render_customer(merchant, trigger, plan, customer)
+    else:
+        body, params = _render_merchant(category, merchant, trigger, plan)
+    return _normalize_mojibake(body), [_normalize_mojibake(value) for value in params]
 
 
 # ---------------------------------------------------------------------------
@@ -168,13 +198,16 @@ def _render_merchant(
             or "your requested plan"
         )
         topic = str(topic).replace("_", " ")
-        merchant_msg = facts.get("merchant_last_message")
-        artifact = facts.get("artifact_skeleton", "")
+        merchant_msg = _sanitize_single_question(facts.get("merchant_last_message"))
+        artifact = _sanitize_single_question(facts.get("artifact_skeleton", ""))
         merchant_confirms = facts.get("merchant_confirms", False)
+        cta = (
+            "Reply when you want me to start with a first version you can edit."
+            if "?" in merchant_msg or "?" in artifact
+            else "Want me to start with a first version you can edit?"
+        )
 
         if merchant_confirms and artifact:
-            # Fix 1: merchant already confirmed — show the grounded structure,
-            # then ask for a lightweight refinement rather than asking to start.
             return (
                 f"{sal}, here is a starting structure for the {topic}:\n\n"
                 f"{artifact}\n\n"
@@ -182,10 +215,10 @@ def _render_merchant(
                 [owner, topic],
             )
         if merchant_msg:
+            # Fix 9B: frame as follow-up rather than verbatim echo to avoid garbled quotes
             return (
-                f"{sal}, you said: \"{merchant_msg}\" — I am ready to draft the {topic} now. "
-                f"Want me to start with a first version you can edit?",
-                [owner, topic, str(merchant_msg)],
+                f"{sal}, following your note on {topic} — I’m ready to draft a first version now. {cta}",
+                [owner, topic],
             )
         return (
             f"{sal}, I can continue the {topic} plan from your earlier request. "
@@ -311,10 +344,10 @@ def _render_merchant(
                 [owner, topic],
             )
         if merchant_msg:
+            # Fix 9B: frame as follow-up rather than verbatim echo to avoid garbled quotes
             return (
-                f"{sal}, you said: \"{merchant_msg}\" — I am ready to draft the {topic} now. "
-                f"Want me to start with a first version you can edit?",
-                [owner, topic, str(merchant_msg)],
+                f"{sal}, following your note on {topic} — I’m ready to draft a first version now. Want me to start?",
+                [owner, topic],
             )
         return (
             f"{sal}, I can continue the {topic} plan from your earlier request. "
@@ -331,17 +364,28 @@ def _render_merchant(
     if trigger.kind == "dormant_with_vera":
         days = facts.get("days_since_last_merchant_message") or facts.get("days_inactive")
         peer_ctr_str = _peer_ctr_sentence(facts)
-        detail = f"in {days} days" if days is not None else "recently"
-        if peer_ctr_str:
+        # Fix 9B: guard None days — only include duration when it is a real number
+        if days is not None:
+            detail = f"in {days} days"
+        else:
+            detail = "recently"
+        if peer_ctr_str and days is not None:
             return (
                 f"{sal}, we have not spoken {detail}. Meanwhile, {peer_ctr_str}. "
                 f"Want me to share one growth idea to act on this week?",
-                [owner, str(days or "")],
+                [owner, str(days)],
             )
+        if days is not None:
+            return (
+                f"{sal}, we have not spoken {detail}. "
+                f"Want me to share one growth idea for your business this week?",
+                [owner, str(days)],
+            )
+        # No duration known — give a general re-engagement message
         return (
-            f"{sal}, we have not spoken {detail}. "
-            f"Want me to share one growth idea for your business this week?",
-            [owner, str(days or "")],
+            f"{sal}, it has been a while since we last connected. "
+            f"Want me to share one useful growth idea for this week?",
+            [owner, ""],
         )
 
     # Generic fallback — still clean, no internal vocabulary
@@ -556,6 +600,13 @@ def _render_digest(
         return _render_seasonal_digest(sal, category, merchant, facts, item, title, source, actionable, owner)
 
     # --- Standard digest body ---
+    # Fix 2: strip mojibake em-dash from title before embedding
+    if title:
+        _DASH_VARIANTS_D = ("â\u20ac\u201d", "\u2014", " \u2013 ", " - ", " -- ")
+        for _sep in _DASH_VARIANTS_D:
+            if _sep in title:
+                title = title.split(_sep)[0].strip()
+                break
     body = f"{sal}, a relevant {category.slug} update landed"
     if title:
         body += f": {title}"
@@ -605,30 +656,41 @@ def _render_perf_dip(
     performance = facts.get("performance", {})
     metric = performance.get("metric") if isinstance(performance, dict) else None
     delta = performance.get("delta_pct") if isinstance(performance, dict) else None
-
-    # Use peer comparison when available for richer specificity
     peer_sentence = _peer_ctr_sentence(facts)
+    season_note = trigger.facts.get("season_note", "").replace("_", " ")
+    metric_label = _metric_display(metric)
+    metric_verb = _metric_verb(metric)
 
     if trigger.kind == "seasonal_perf_dip":
-        # Reframe: this is expected — don't alarm
-        season_note = trigger.facts.get("season_note", "").replace("_", " ")
         if metric and delta is not None:
-            body = f"{sal}, your {metric} is down {_percent(delta)} this week"
+            body = f"{sal}, your {metric_label} {metric_verb} down {_percent(delta)} this week"
             if season_note:
                 body += f" — this is the normal {season_note} dip"
             if peer_sentence:
                 body += f". {peer_sentence.capitalize()}"
             body += ". No action needed on spend — focus on retaining current members."
-            return f"{body} Want me to draft a retention nudge?", [sal, metric, _percent(delta)]
-        body = f"{sal}, the current {metric or 'performance'} dip is seasonal and expected"
+            return f"{body} Want me to draft a retention nudge?", [sal, metric_label, _percent(delta)]
+        body = f"{sal}, the current {metric_label or 'performance'} dip is seasonal and expected"
         return f"{body}. Want me to draft a retention message for your active customers?", [sal]
 
-    # Regular perf_dip
     if metric and delta is not None:
-        body = f"{sal}, your {metric} is down {_percent(delta)}"
+        body = f"{sal}, your {metric_label} {metric_verb} down {_percent(delta)}"
+        # Fix 5: add absolute current value + baseline when grounded in context
+        perf_actuals = facts.get("performance_actuals", {})
+        current_value = perf_actuals.get("current_value")
+        vs_baseline   = perf_actuals.get("vs_baseline")
+        if current_value is not None and vs_baseline is not None:
+            body += f" — currently {current_value} vs a {vs_baseline} baseline"
+        elif current_value is not None:
+            body += f" — currently at {current_value} this month"
         if peer_sentence:
             body += f". {peer_sentence.capitalize()}"
-        return f"{body}. Want me to review the next action?", [sal, metric, _percent(delta)]
+        # Fix 7: add evidence_signals[0] as fallback when peer_ctr not available
+        elif not peer_sentence:
+            signals_list = facts.get("evidence_signals", [])
+            if signals_list:
+                body += f". {str(signals_list[0]).capitalize()}"
+        return f"{body}. Want me to review the next action?", [sal, metric_label, _percent(delta)]
 
     return f"{sal}, there is a performance dip worth reviewing. Want me to prepare options?", [sal]
 
@@ -720,19 +782,27 @@ def _render_festival_upcoming(sal: str, facts: dict[str, Any]) -> tuple[str, lis
     offer = facts.get("offer", {})
     title = offer.get("title") if isinstance(offer, dict) else None
 
+    if not festival:
+        # No festival name available — skip generic "upcoming occasion" message
+        return (
+            f"{sal}, a seasonal opportunity is coming up for your category. "
+            f"Want me to prepare a campaign idea?",
+            [sal],
+        )
+
     timing = ""
     if days_until is not None:
         timing = f" in {days_until} days"
     elif date:
         timing = f" on {date}"
 
-    detail = f"{festival}{timing}" if festival else f"an upcoming occasion{timing}"
+    detail = f"{festival}{timing}"
     offer_note = f" Your active offer, {title}, fits well." if title else ""
 
     return (
         f"{sal}, {detail} is coming up.{offer_note} "
         f"Want me to prepare one category-fit campaign idea?",
-        [sal, str(festival or ""), str(date or "")],
+        [sal, str(festival), str(date or "")],
     )
 
 
@@ -743,8 +813,7 @@ def _render_curious_ask(
     facts: dict[str, Any],
 ) -> tuple[str, list[str]]:
     """
-    Curious-ask template.  No internal vocabulary.  Uses category trend and
-    merchant performance to make the question feel specific and valuable.
+    Curious-ask template. No internal vocabulary and a natural merchant reply CTA.
     """
     top_query = facts.get("top_trend_query")
     top_delta = facts.get("top_trend_delta_yoy")
@@ -753,31 +822,26 @@ def _render_curious_ask(
     )
     merchant_views = merchant.performance.get("views")
 
-    # Build a context-specific prompt for the merchant
     if top_query and top_delta is not None:
         trend_pct = f"{abs(top_delta) * 100:g}%"
         body = (
             f"{sal}, searches for '{top_query}' are up {trend_pct} in your category. "
-            f"Quick check — which service has been most requested at your place this week?"
+            f"Which service has been most asked for at your place this week?"
         )
-        cta = "I will turn your answer into a Google post and a ready-to-share customer note."
+        cta = "Reply back and I’ll draft a Google post + a ready-to-share note around your answer."
         return f"{body} {cta}", [sal, top_query, trend_pct]
 
     if merchant_views is not None and peer_views is not None:
         body = (
             f"{sal}, your profile had {merchant_views} views this month "
             f"(category average is {peer_views}). "
-            f"Quick check — which service has been most requested at your place this week?"
+            f"Which service has been most asked for this week?"
         )
-        cta = "I will turn your answer into a Google post."
+        cta = "Reply back and I’ll draft a Google post around your answer."
         return f"{body} {cta}", [sal, str(merchant_views), str(peer_views)]
 
-    # Minimal grounded fallback
-    body = (
-        f"{sal}, quick check — which service or product has been most asked for "
-        f"at your {category.slug} this week?"
-    )
-    cta = "I will turn your answer into a Google post and a ready-to-use customer reply."
+    body = f"{sal}, which service or product has been most asked for at your {category.slug} this week?"
+    cta = "Reply back and I’ll draft a Google post + a ready-to-use customer reply."
     return f"{body} {cta}", [sal, category.slug]
 
 
@@ -898,9 +962,22 @@ def _category_demand_noun(slug: str) -> str:
     return _MAP.get(slug, f"demand for {slug}")
 
 def _salutation(category: CategoryContext, owner: str) -> str:
+    owner = _normalize_mojibake(owner)
     if category.slug == "dentists" and owner and not owner.casefold().startswith("dr"):
         return f"Dr. {owner}"
     return owner
+
+
+def _sanitize_single_question(value: Any) -> str:
+    if value is None:
+        return ""
+    text = str(value)
+    sanitized = text.replace("\n", " ")
+    return " ".join(sanitized.split())
+
+
+def _metric_verb(metric: str | None) -> str:
+    return "are" if metric in {"views", "directions", "leads"} else "is"
 
 
 def _peer_ctr_sentence(facts: dict[str, Any]) -> str:
