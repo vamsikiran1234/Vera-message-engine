@@ -123,6 +123,22 @@ def metadata() -> dict[str, Any]:
     }
 
 
+@app.get("/v1/context")
+def get_context_guide() -> dict[str, Any]:
+    return {
+        "message": "/v1/context is an HTTP POST endpoint used to push context envelopes.",
+        "method": "POST",
+        "documentation": "/docs",
+        "sample_body": {
+            "scope": "merchant",
+            "context_id": "m_001",
+            "version": 1,
+            "payload": {},
+            "delivered_at": "2026-10-19T00:00:00Z",
+        },
+    }
+
+
 @app.post("/v1/context", status_code=200)
 def push_context(body: ContextRequest) -> dict[str, Any]:
     try:
@@ -148,6 +164,19 @@ def push_context(body: ContextRequest) -> dict[str, Any]:
     return {"accepted": True, "ack_id": f"ack_{body.context_id}_v{body.version}", "stored_at": utc_now()}
 
 
+@app.get("/v1/tick")
+def get_tick_guide() -> dict[str, Any]:
+    return {
+        "message": "/v1/tick is an HTTP POST endpoint used by the engine to decide proactive merchant actions.",
+        "method": "POST",
+        "documentation": "/docs",
+        "sample_body": {
+            "now": "2026-10-19T05:00:00Z",
+            "available_triggers": ["trg_001_research_digest_dentists"],
+        },
+    }
+
+
 @app.post("/v1/tick")
 def tick(body: TickRequest) -> dict[str, list[Any]]:
     engine = DecisionEngine(context_store, conversation_store, suppression_store, decision_logger)
@@ -159,6 +188,23 @@ def tick(body: TickRequest) -> dict[str, list[Any]]:
         if action:
             actions.append(action_to_dict(action))
     return {"actions": actions}
+
+
+@app.get("/v1/reply")
+def get_reply_guide() -> dict[str, Any]:
+    return {
+        "message": "/v1/reply is an HTTP POST endpoint used to handle merchant replies.",
+        "method": "POST",
+        "documentation": "/docs",
+        "sample_body": {
+            "conversation_id": "conv_001",
+            "merchant_id": "m_001",
+            "from_role": "merchant",
+            "message": "Yes, please draft it.",
+            "received_at": "2026-10-19T05:00:00Z",
+            "turn_number": 2,
+        },
+    }
 
 
 @app.post("/v1/reply")
