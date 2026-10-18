@@ -54,6 +54,18 @@ class ReplyRequest(BaseModel):
     turn_number: int = Field(ge=1)
 
 
+@app.get("/")
+def root() -> dict[str, Any]:
+    return {
+        "service": "Vera Message Engine",
+        "challenge": "magicpin AI Challenge",
+        "status": "online",
+        "healthz": "/v1/healthz",
+        "metadata": "/v1/metadata",
+        "documentation": "/docs",
+    }
+
+
 @app.get("/healthz")
 @app.get("/v1/healthz")
 def healthz() -> dict[str, Any]:
