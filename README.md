@@ -1,4 +1,6 @@
-# <p align="center"><img src="https://raw.githubusercontent.com/vamsikiran1234/Vera-message-engine/main/docs/assets/banner.png" alt="Vera Banner" width="100%" onerror="this.style.display='none'"/><br>🔮 Vera — Autonomous Merchant Growth Engine</p>
+<p align="center">
+  <img src="./docs/assets/banner.svg" alt="Vera — Autonomous Merchant Growth Engine" width="100%"/>
+</p>
 
 <p align="center">
   <strong>Deterministic, Context-Grounded Merchant Engagement & Recall Platform for Hyperlocal Commerce</strong>
@@ -12,6 +14,18 @@
   <a href="#-deployment-guide-render"><img src="https://img.shields.io/badge/Deploy%20on-Render%20%2F%20Docker-46E3B7?style=for-the-badge&logo=render&logoColor=black" alt="Render Ready"/></a>
   <a href="#-architecture--decision-pipeline"><img src="https://img.shields.io/badge/Zero-Hallucinations-blueviolet?style=for-the-badge" alt="Zero Hallucination"/></a>
 </p>
+
+---
+
+## 🔗 Quick Submission & Live Links
+
+| Resource | Direct Link | Description |
+| :--- | :--- | :--- |
+| 🌐 **Live Bot Base URL** | [`https://vera-message-engine-4r0i.onrender.com`](https://vera-message-engine-4r0i.onrender.com) | Primary endpoint for magicpin Evaluation Harness |
+| 🩺 **Health Check API** | [`/v1/healthz`](https://vera-message-engine-4r0i.onrender.com/v1/healthz) | Live system status & uptime verification |
+| 📖 **Interactive API Docs** | [`/docs`](https://vera-message-engine-4r0i.onrender.com/docs) | Interactive Swagger UI testing interface |
+| ℹ️ **Bot Metadata API** | [`/v1/metadata`](https://vera-message-engine-4r0i.onrender.com/v1/metadata) | Engine team info, model approach & version |
+| 🐙 **GitHub Repository** | [`Vera-message-engine`](https://github.com/vamsikiran1234/Vera-message-engine) | Complete source code, dataset & test suite |
 
 ---
 
@@ -181,7 +195,7 @@ Content-Type: application/json
   "context_id": "m_001_drmeera_dentist_delhi",
   "version": 1,
   "payload": { ... },
-  "updated_at": "2026-10-19T00:00:00Z"
+  "delivered_at": "2026-10-19T00:00:00Z"
 }
 ```
 
@@ -296,6 +310,11 @@ python judge_simulator.py
 
 Vera is packaged and optimized for deployment on **Render** as a high-performance Web Service.
 
+### Live Production Deployment
+- **Base URL**: [`https://vera-message-engine-4r0i.onrender.com`](https://vera-message-engine-4r0i.onrender.com)
+- **Health Check**: [`https://vera-message-engine-4r0i.onrender.com/v1/healthz`](https://vera-message-engine-4r0i.onrender.com/v1/healthz)
+- **Swagger Documentation**: [`https://vera-message-engine-4r0i.onrender.com/docs`](https://vera-message-engine-4r0i.onrender.com/docs)
+
 ### Option A: 1-Click Blueprint Deployment (`render.yaml`)
 
 1. Fork or push this repository to your GitHub account.
@@ -313,20 +332,20 @@ Vera is packaged and optimized for deployment on **Render** as a high-performanc
 2. Connect your GitHub repository: `vamsikiran1234/Vera-message-engine`.
 3. Configure the following service settings:
    - **Name**: `vera-message-engine`
-   - **Region**: Oregon (US West) or Singapore (closest to India)
+   - **Region**: **Singapore** (lowest latency to India) or **Oregon**
    - **Branch**: `main` (or `vamsi`)
-   - **Root Directory**: `.` (leave empty)
+   - **Root Directory**: `.` *(leave blank)*
    - **Environment / Runtime**: **Docker**
    - **Instance Type**: **Free** (or Starter)
 4. Under **Advanced Settings**:
    - **Health Check Path**: `/v1/healthz`
+   - **Auto-Deploy**: **Yes**
    - **Environment Variables**:
      | Variable | Value | Description |
      | :--- | :--- | :--- |
      | `PYTHONUNBUFFERED` | `1` | Stream console logs in real time |
      | `LLM_COMPOSER_ENABLED` | `false` | Zero-latency deterministic engine |
 5. Click **Create Web Service**.
-6. Render will build the container from `Dockerfile`, assign an HTTPS URL (e.g. `https://vera-message-engine.onrender.com`), and verify the health check endpoint.
 
 ---
 
@@ -343,28 +362,14 @@ Vera is packaged and optimized for deployment on **Render** as a high-performanc
 │   ├── merchants_seed.json    # Initial merchant baseline profiles
 │   ├── customers_seed.json    # Customer consent scopes and preference records
 │   └── triggers_seed.json     # 25 benchmark triggers
+├── docs/                      # Documentation & visual assets
+│   ├── assets/                # Modern SVG banners and visual assets
+│   │   └── banner.svg         # High-resolution vector header banner
+│   ├── technical-design.md    # In-depth architectural blueprint
+│   └── README.md              # Mirrored documentation
 ├── expanded/                  # 100-trigger expanded testing dataset and test pairs
 ├── tests/                     # 161 unit tests covering all engine modules
-│   ├── test_api.py            # HTTP API endpoint contract tests
-│   ├── test_candidates.py     # Candidate generation logic tests
-│   ├── test_composer.py       # Grounded composition tests
-│   ├── test_engine.py         # DecisionEngine integration tests
-│   ├── test_scoring.py        # Candidate ranking and multi-factor scoring tests
-│   ├── test_templates.py      # Template rendering and format validation tests
-│   └── test_validator.py      # Numeric fact grounding & taboo guard tests
 └── vera_engine/               # Core deterministic decision and composition engine
-    ├── candidates.py          # Action candidate generation per trigger
-    ├── composer.py            # Primary compose() pipeline
-    ├── engine.py              # DecisionEngine coordinator & tick processing
-    ├── evidence_selection.py  # Fact grounding and contextual evidence picking
-    ├── models.py              # Pydantic/dataclass schema definitions
-    ├── planner.py             # MessagePlan builder
-    ├── scoring.py             # Deterministic prioritization & ranking
-    ├── selection.py           # Top candidate selection & arbitration
-    ├── signals.py             # Raw metric extraction & signal normalization
-    ├── store.py               # Thread-safe in-memory context & suppression stores
-    ├── templates.py           # Domain-tuned, zero-hallucination message renderers
-    └── validator.py           # Strict mathematical fact validator & safety filter
 ```
 
 ---
