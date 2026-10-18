@@ -68,13 +68,22 @@ GEMINI_MODELS = [
     model.strip()
     for model in os.getenv(
         "GEMINI_MODELS",
-        "gemini-3.6-flash,gemini-3.5-flash,gemini-3.1-flash-lite",
+        "gemini-3.1-flash-lite,gemini-3.7-flash,gemini-3.8-flash",
     ).split(",")
     if model.strip()
 ]
 
 # For Ollama only: local server URL
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
+
+# For OmniRoute only: local or remote gateway URL
+OMNIROUTE_URL = os.getenv("OMNIROUTE_URL", "http://localhost:20128")
+OMNIROUTE_API_KEY = os.getenv("OMNIROUTE_API_KEY", "")
+OMNIROUTE_MODEL = os.getenv("OMNIROUTE_MODEL", "gemini/gemini-3.7-flash")
+
+# For Cheaper Inference only
+CHEAPER_INFERENCE_API_KEY = os.getenv("CHEAPER_INFERENCE_API_KEY", "")
+CHEAPER_INFERENCE_MODEL = os.getenv("CHEAPER_INFERENCE_MODEL", "claude-opus-4.8-fast")
 
 # Which test to run by default
 TEST_SCENARIO = os.getenv("TEST_SCENARIO", "all")
@@ -95,8 +104,17 @@ from pathlib import Path
 from urllib import request as urlrequest, error as urlerror
 from abc import ABC, abstractmethod
 
+if sys.platform == "win32":
+    try:
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        if hasattr(sys.stderr, "reconfigure"):
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 # Constants
-TIMEOUT_LLM = 45
+TIMEOUT_LLM = 90
 DATASET_DIR = Path(__file__).parent / "dataset"
 
 # =============================================================================
@@ -142,7 +160,12 @@ def print_score_bar(dimension: str, score: int, max_score: int = 10):
     bar_filled = int((score / max_score) * 20)
     bar_empty = 20 - bar_filled
     color = Colors.GREEN if score >= 7 else Colors.YELLOW if score >= 4 else Colors.RED
-    print(f"  {dimension:22} [{color}{'█' * bar_filled}{Colors.DIM}{'░' * bar_empty}{Colors.RESET}] {color}{score:2}/{max_score}{Colors.RESET}")
+    try:
+        bar = f"{color}{'█' * bar_filled}{Colors.DIM}{'░' * bar_empty}{Colors.RESET}"
+        print(f"  {dimension:22} [{bar}] {color}{score:2}/{max_score}{Colors.RESET}")
+    except Exception:
+        bar = f"{color}{'#' * bar_filled}{Colors.DIM}{'-' * bar_empty}{Colors.RESET}"
+        print(f"  {dimension:22} [{bar}] {color}{score:2}/{max_score}{Colors.RESET}")
 
 def print_reason(text: str):
     wrapped = text[:200] + "..." if len(text) > 200 else text
@@ -262,10 +285,35 @@ class GeminiProvider(LLMProvider):
         }).encode("utf-8")
 
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent?key={self.api_key}"
-        req = urlrequest.Request(url, data=body, headers={"Content-Type": "application/json"})
-        resp = urlrequest.urlopen(req, timeout=TIMEOUT_LLM)
-        data = json.loads(resp.read().decode("utf-8"))
-        return data["candidates"][0]["content"]["parts"][0]["text"]
+        last_error = None
+        for attempt in range(2):
+            try:
+                req = urlrequest.Request(url, data=body, headers={"Content-Type": "application/json"})
+                resp = urlrequest.urlopen(req, timeout=TIMEOUT_LLM)
+                data = json.loads(resp.read().decode("utf-8"))
+                return data["candidates"][0]["content"]["parts"][0]["text"]
+            except urlerror.HTTPError as e:
+                last_error = e
+                if e.code == 429:
+                    if attempt < 1:
+                        sleep_s = 3.0
+                        print_warn(f"Gemini 429 on {self.model}, pausing {sleep_s:.0f}s before trying fallback...")
+                        time.sleep(sleep_s)
+                    else:
+                        break
+                elif e.code == 503:
+                    if attempt < 1:
+                        sleep_s = 2.0
+                        print_warn(f"Gemini 503 on {self.model}, retrying in {sleep_s:.0f}s...")
+                        time.sleep(sleep_s)
+                    else:
+                        break
+                else:
+                    break
+            except Exception as e:
+                last_error = e
+                break
+        raise last_error or RuntimeError("Gemini request failed")
 
 
 class GeminiFallbackProvider(LLMProvider):
@@ -407,6 +455,87 @@ class OpenRouterProvider(LLMProvider):
         return data["choices"][0]["message"]["content"]
 
 
+class OmniRouteProvider(LLMProvider):
+    """OmniRoute AI gateway (OpenAI-compatible) with automatic fallback chains."""
+    def __init__(self, api_key: str = "", model: str = "", base_url: str = ""):
+        self.api_key = api_key or os.getenv("OMNIROUTE_API_KEY", "omniroute")
+        self.model = model or os.getenv("OMNIROUTE_MODEL", "gemini/gemini-3.7-flash")
+        self.base_url = (base_url or OMNIROUTE_URL).rstrip("/")
+        fallback_key = os.getenv("LLM_API_KEY", "")
+        self.fallback = GeminiFallbackProvider(fallback_key, GEMINI_MODELS) if fallback_key else None
+
+    def name(self) -> str:
+        return f"OmniRoute ({self.model} via {self.base_url})"
+
+    def complete(self, prompt: str, system: str = None) -> str:
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}"
+        }
+        req = urlrequest.Request(
+            f"{self.base_url}/v1/chat/completions",
+            data=json.dumps({
+                "model": self.model,
+                "messages": messages,
+                "temperature": 0.2,
+                "max_tokens": 1500,
+            }).encode("utf-8"),
+            headers=headers
+        )
+        if getattr(self, "_gateway_failed", False) and self.fallback:
+            return self.fallback.complete(prompt, system)
+
+        try:
+            resp = urlrequest.urlopen(req, timeout=3)
+            data = json.loads(resp.read().decode("utf-8"))
+            return data["choices"][0]["message"]["content"]
+        except Exception as e:
+            self._gateway_failed = True
+            if self.fallback:
+                print_warn(f"OmniRoute gateway error ({e}); using direct Gemini fallback")
+                return self.fallback.complete(prompt, system)
+            raise e
+
+
+class CheaperInferenceProvider(LLMProvider):
+    """Cheaper Inference OpenAI-compatible endpoint."""
+    def __init__(self, api_key: str = "", model: str = ""):
+        self.api_key = api_key or os.getenv("CHEAPER_INFERENCE_API_KEY", "")
+        self.model = model or os.getenv("CHEAPER_INFERENCE_MODEL", "claude-opus-4.8-fast")
+
+    def name(self) -> str:
+        return f"Cheaper Inference ({self.model})"
+
+    def complete(self, prompt: str, system: str = None) -> str:
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}"
+        }
+        req = urlrequest.Request(
+            "https://api.cheaperinference.com/v1/chat/completions",
+            data=json.dumps({
+                "model": self.model,
+                "messages": messages,
+                "temperature": 0.2,
+                "max_tokens": 1500,
+            }).encode("utf-8"),
+            headers=headers
+        )
+        resp = urlrequest.urlopen(req, timeout=TIMEOUT_LLM)
+        data = json.loads(resp.read().decode("utf-8"))
+        return data["choices"][0]["message"]["content"]
+
+
 def create_provider() -> LLMProvider:
     """Create LLM provider from configuration."""
     providers = {
@@ -417,6 +546,8 @@ def create_provider() -> LLMProvider:
         "groq": lambda: GroqProvider(LLM_API_KEY, LLM_MODEL) if LLM_MODEL else GroqFallbackProvider(LLM_API_KEY, GROQ_MODELS),
         "ollama": lambda: OllamaProvider(LLM_MODEL, OLLAMA_URL),
         "openrouter": lambda: OpenRouterProvider(LLM_API_KEY, LLM_MODEL),
+        "omniroute": lambda: OmniRouteProvider(OMNIROUTE_API_KEY or LLM_API_KEY, LLM_MODEL or OMNIROUTE_MODEL, OMNIROUTE_URL),
+        "cheaperinference": lambda: CheaperInferenceProvider(CHEAPER_INFERENCE_API_KEY or LLM_API_KEY, LLM_MODEL or CHEAPER_INFERENCE_MODEL),
     }
 
     if LLM_PROVIDER not in providers:
@@ -522,7 +653,11 @@ class BotClient:
 class LLMScorer:
     """Scores messages using LLM and provides detailed reasoning."""
 
-    SYSTEM = """You are a STRICT judge for the magicpin AI Challenge. You score merchant engagement messages.
+    SYSTEM = """You are a STRICT judge for the magicpin AI Challenge. You score messages composed by the AI engine.
+
+SCOPES & ROLES:
+- If Send As is "vera": This is a merchant-facing message engaging the business owner.
+- If Send As is "merchant_on_behalf" (when Customer is present): This is an automated customer retention/appointment care message sent on behalf of the merchant to their customer. Evaluate Merchant Fit as accurately representing the merchant's brand and services, and Category Fit/Engagement as compelling and frictionless to the customer.
 
 SCORING DIMENSIONS (0-10 each, be strict - 5 is average, 7+ is good, 9+ is excellent):
 
@@ -594,15 +729,17 @@ Merchant: {merchant.get('identity', {}).get('name', 'unknown')}
 Owner: {merchant.get('identity', {}).get('owner_first_name', 'unknown')}
 Locality: {merchant.get('identity', {}).get('locality', 'unknown')}
 Languages: {merchant.get('identity', {}).get('languages', [])}
-Performance: views={merchant.get('performance', {}).get('views', '?')}, calls={merchant.get('performance', {}).get('calls', '?')}, ctr={merchant.get('performance', {}).get('ctr', '?')}
+Performance: {json.dumps(merchant.get('performance', {}))}
 Signals: {merchant.get('signals', [])}
+Customer Aggregate: {json.dumps(merchant.get('customer_aggregate', {}))}
+Subscription: {json.dumps(merchant.get('subscription', {}))}
 Active Offers: {[o.get('title') for o in merchant.get('offers', []) if o.get('status') == 'active']}
 
 Trigger Kind: {trigger.get('kind', 'unknown')}
 Trigger Payload: {json.dumps(trigger.get('payload', {}))}
 Trigger Urgency: {trigger.get('urgency', '?')}
 
-Customer: {json.dumps(customer.get('identity', {})) if customer else 'None (merchant-facing)'}
+Customer: {json.dumps(customer) if customer else 'None (merchant-facing)'}
 
 === BOT'S MESSAGE ===
 Body ({len(body)} chars): "{body}"
@@ -765,6 +902,12 @@ class JudgeSimulator:
             short_id = mid.split('_')[1] if '_' in mid else mid[:10]
             print(f"  [{status}] merchant/{short_id}")
 
+        for cid, c in list(self.dataset.customers.items())[:5]:
+            data, err, _ = self.client.push_context("customer", cid, 1, c)
+            status = "PASS" if data and data.get("accepted") else "FAIL"
+            short_id = cid.split('_')[1] if '_' in cid else cid[:10]
+            print(f"  [{status}] customer/{short_id}")
+
         return True
 
     def _phase2_short(self) -> bool:
@@ -920,8 +1063,14 @@ class JudgeSimulator:
 
         print_section("FULL EVALUATION")
 
+        warmup_mids = set(list(self.dataset.merchants.keys())[:5])
         for mid, m in self.dataset.merchants.items():
-            self.client.push_context("merchant", mid, 1, m)
+            version = 2 if mid in warmup_mids else 1
+            self.client.push_context("merchant", mid, version, m)
+        warmup_cids = set(list(self.dataset.customers.keys())[:5])
+        for cid, c in self.dataset.customers.items():
+            version = 2 if cid in warmup_cids else 1
+            self.client.push_context("customer", cid, version, c)
         for tid, t in self.dataset.triggers.items():
             self.client.push_context("trigger", tid, 1, t)
 
@@ -956,7 +1105,7 @@ class JudgeSimulator:
         merchant = self.dataset.merchants.get(mid, {})
         customer = self.dataset.customers.get(cid) if cid else None
         category = self.dataset.categories.get(merchant.get("category_slug", ""), {})
-
+        time.sleep(4.5)
         score = self.scorer.score(action, category, merchant, trigger, customer)
         self.all_scores.append(score)
 
@@ -1001,12 +1150,12 @@ class JudgeSimulator:
 
         n = len(self.all_scores)
         avg = ScoreResult(
-            specificity=sum(s.specificity for s in self.all_scores) // n,
-            category_fit=sum(s.category_fit for s in self.all_scores) // n,
-            merchant_fit=sum(s.merchant_fit for s in self.all_scores) // n,
-            decision_quality=sum(s.decision_quality for s in self.all_scores) // n,
-            engagement_compulsion=sum(s.engagement_compulsion for s in self.all_scores) // n,
-            penalties=sum(s.penalties for s in self.all_scores)
+            specificity=round(sum(s.specificity for s in self.all_scores) / n),
+            category_fit=round(sum(s.category_fit for s in self.all_scores) / n),
+            merchant_fit=round(sum(s.merchant_fit for s in self.all_scores) / n),
+            decision_quality=round(sum(s.decision_quality for s in self.all_scores) / n),
+            engagement_compulsion=round(sum(s.engagement_compulsion for s in self.all_scores) / n),
+            penalties=round(sum(s.penalties for s in self.all_scores) / n)
         )
 
         print_info(f"Messages scored: {n}\n")
@@ -1039,9 +1188,19 @@ def main():
     print_header("magicpin AI Challenge — LLM Judge")
 
     # Validate configuration
-    if LLM_PROVIDER != "ollama" and not LLM_API_KEY:
-        print_fail("LLM_API_KEY is not set!")
-        print_info("Edit the CONFIGURATION section at the top of this file")
+    required_key = {
+        "omniroute": OMNIROUTE_API_KEY or LLM_API_KEY,
+        "cheaperinference": CHEAPER_INFERENCE_API_KEY or LLM_API_KEY,
+        "ollama": "local",
+    }.get(LLM_PROVIDER, LLM_API_KEY)
+
+    if not required_key:
+        key_var = {
+            "omniroute": "OMNIROUTE_API_KEY",
+            "cheaperinference": "CHEAPER_INFERENCE_API_KEY",
+        }.get(LLM_PROVIDER, "LLM_API_KEY")
+        print_fail(f"{key_var} is not set!")
+        print_info("Edit .env or the CONFIGURATION section at the top of this file")
         print_info("Set your API key for your chosen provider")
         sys.exit(1)
 

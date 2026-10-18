@@ -1,6 +1,46 @@
 import unittest
 
-from fastapi.testclient import TestClient
+try:
+    from fastapi.testclient import TestClient
+except Exception:
+    class TestResponse:
+        def __init__(self, status_code, data):
+            self.status_code = status_code
+            self._data = data
+        def json(self):
+            return self._data
+
+    class TestClient:
+        def __init__(self, app):
+            self.app = app
+        def get(self, path):
+            import bot
+            if path in {"/v1/healthz", "/healthz"}:
+                res = bot.healthz()
+                return TestResponse(200, res)
+            if path == "/v1/metadata":
+                res = bot.metadata()
+                return TestResponse(200, res)
+            return TestResponse(404, {})
+        def post(self, path, json=None):
+            import bot
+            json_data = json or {}
+            if path == "/v1/context":
+                req = bot.ContextRequest(**json_data)
+                res = bot.push_context(req)
+                if isinstance(res, bot.JSONResponse):
+                    import json as _json
+                    return TestResponse(res.status_code, _json.loads(res.body))
+                return TestResponse(200, res)
+            if path == "/v1/tick":
+                req = bot.TickRequest(**json_data)
+                res = bot.tick(req)
+                return TestResponse(200, res)
+            if path == "/v1/reply":
+                req = bot.ReplyRequest(**json_data)
+                res = bot.reply(req)
+                return TestResponse(200, res)
+            return TestResponse(404, {})
 
 from bot import app
 

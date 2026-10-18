@@ -74,25 +74,121 @@ def _render_customer(
     facts = plan.facts
     greeting = _customer_greeting(category_slug=merchant.category_slug, customer=customer)
 
+    owner = str(merchant.identity.get("owner_first_name") or "")
+    sender_prefix = f" {owner} from {merchant_name} checking in —" if owner else f" {merchant_name} checking in —"
+
+    if trigger.kind == "chronic_refill_due":
+        molecules = facts.get("molecule_list", [])
+        if molecules:
+            med_str = ", ".join(molecules[:-1]) + f" & {molecules[-1]}" if len(molecules) > 1 else str(molecules[0])
+        else:
+            med_str = "prescribed medications"
+        runs_out = facts.get("stock_runs_out_iso", "")
+        date_str = ""
+        if runs_out:
+            try:
+                from datetime import datetime as _dt
+                dt = _dt.fromisoformat(runs_out)
+                date_str = f" before {dt.strftime('%d %b')}"
+            except Exception:
+                date_str = f" before {runs_out[:10]}"
+        offer = facts.get("offer")
+        offer_title = offer.get("title") if isinstance(offer, dict) else None
+        offer_str = f" Free delivery is available with {offer_title}." if offer_title else ""
+        addr_str = " We have your saved delivery address on file." if facts.get("delivery_address_saved") else ""
+        return (
+            f"{greeting} {customer_name},{sender_prefix} your monthly refill for {med_str} is due{date_str}.{addr_str}{offer_str} Want me to confirm and schedule your refill delivery?",
+            [customer_name, merchant_name, med_str],
+        )
+
+    if trigger.kind == "wedding_package_followup":
+        w_date = facts.get("wedding_date", "")
+        w_date_str = ""
+        if w_date:
+            try:
+                from datetime import datetime as _dt
+                dt = _dt.fromisoformat(w_date)
+                w_date_str = f" for your {dt.strftime('%d %b')} wedding"
+            except Exception:
+                w_date_str = f" for your {w_date} wedding"
+        window = str(facts.get("next_step_window_open", "")).replace("_", " ")
+        window_clause = f" your {window} window is now open{w_date_str}" if window else f" your bridal prep window is now open{w_date_str}"
+        return (
+            f"{greeting} {customer_name},{sender_prefix} following your bridal trial,{window_clause}. Want me to confirm and reserve your first session?",
+            [customer_name, merchant_name, window],
+        )
+
     if trigger.kind in {"recall_due", "appointment_tomorrow", "trial_followup"}:
         detail = _first_fact(
             facts,
             "customer_available_slots", "available_slots", "customer_next_session_options",
             "next_session_options", "customer_due_date", "due_date",
         )
-        if trigger.kind == "recall_due" and facts.get("service_due"):
-            service = f"your {str(facts['service_due']).replace('_', ' ')} is due"
-            detail = f"{service}; {detail}" if detail else service
-        body = f"{greeting} {customer_name}, {merchant_name} has a follow-up for you."
-        if detail:
-            body += f" {detail}."
         offer = facts.get("offer")
-        if isinstance(offer, dict) and offer.get("title"):
-            body += f" Available: {offer['title']}."
-        return f"{body} Want me to confirm it?", [customer_name, merchant_name, detail]
+        offer_title = offer.get("title") if isinstance(offer, dict) else None
+        offer_clause = f" ({offer_title})" if offer_title else ""
+
+        if trigger.kind == "recall_due":
+            service_raw = str(facts.get("service_due") or "scheduled checkup").replace("_", " ")
+            if merchant.category_slug == "dentists":
+                slot_clause = f" We have {detail} open{offer_clause}." if detail else (f" Available: {offer_title}." if offer_title else "")
+                return (
+                    f"{greeting} {customer_name}, {merchant_name} checking in — it's time for your {service_raw} to keep your smile and oral health on track.{slot_clause} Want me to confirm and reserve this slot for you?",
+                    [customer_name, merchant_name, service_raw],
+                )
+            elif merchant.category_slug == "salons":
+                slot_clause = f" We have {detail} open{offer_clause}." if detail else (f" Available: {offer_title}." if offer_title else "")
+                return (
+                    f"{greeting} {customer_name}, {merchant_name} checking in — it's time for your {service_raw} refresh to keep you looking your best.{slot_clause} Want me to confirm and reserve this appointment for you?",
+                    [customer_name, merchant_name, service_raw],
+                )
+            elif merchant.category_slug == "gyms":
+                slot_clause = f" We have {detail} open{offer_clause}." if detail else (f" Available: {offer_title}." if offer_title else "")
+                return (
+                    f"{greeting} {customer_name}, {merchant_name} checking in — time for your {service_raw} to keep your training momentum strong.{slot_clause} Want me to confirm and lock in this slot for you?",
+                    [customer_name, merchant_name, service_raw],
+                )
+            else:
+                slot_clause = f" Available slot: {detail}{offer_clause}." if detail else (f" Available: {offer_title}." if offer_title else "")
+                return (
+                    f"{greeting} {customer_name}, {merchant_name} checking in — your {service_raw} is due.{slot_clause} Want me to confirm and reserve this slot for you?",
+                    [customer_name, merchant_name, service_raw],
+                )
+        elif trigger.kind == "appointment_tomorrow":
+            slot_clause = f" scheduled for {detail}" if detail else " tomorrow"
+            return (
+                f"{greeting} {customer_name}, friendly reminder from {merchant_name} for your appointment{slot_clause}. Want me to confirm your visit?",
+                [customer_name, merchant_name],
+            )
+        else:  # trial_followup
+            slot_clause = f" Next session options: {detail}{offer_clause}." if detail else ""
+            if "(parent:" in customer_name:
+                import re as _re
+                m = _re.search(r"^(.*?)\s*\(parent:\s*(.*?)\)", customer_name)
+                if m:
+                    child_name = m.group(1).strip()
+                    parent_name = m.group(2).strip()
+                    trial_for = f"{child_name}'s kids yoga trial" if "yoga" in str(merchant_name).lower() or "yoga" in str(detail).lower() else f"{child_name}'s trial session"
+                    return (
+                        f"{greeting} {parent_name},{sender_prefix} following up on {trial_for}.{slot_clause} Want me to confirm and reserve {child_name}'s next session?",
+                        [parent_name, merchant_name, child_name],
+                    )
+            return (
+                f"{greeting} {customer_name},{sender_prefix} following up on your recent trial session.{slot_clause} Want me to confirm and reserve your next session?",
+                [customer_name, merchant_name],
+            )
 
     if trigger.kind in {"customer_lapsed_soft", "customer_lapsed_hard"}:
         days = facts.get("days_since_last_visit")
+        focus = str(facts.get("previous_focus") or customer.preferences.get("training_focus") or "").replace("_", " ")
+        slot = str(customer.preferences.get("preferred_slots", "")).replace("_", " ")
+        if merchant.category_slug == "gyms":
+            focus_str = f" — your {focus} momentum is worth restarting" if focus else ""
+            slot_ask = f"a {slot} session" if slot else "a visit"
+            return (
+                f"{greeting} {customer_name}, it’s been {days} days since your last workout at {merchant_name}{focus_str}. Want me to book {slot_ask} to get you back on track?",
+                [customer_name, merchant_name, str(days or "")],
+            )
         detail = f"It has been {days} days since your last visit. " if days else ""
         return (
             f"{greeting} {customer_name}, {detail}"
@@ -111,7 +207,7 @@ def _render_customer(
 
 def _customer_greeting(category_slug: str, customer: CustomerContext) -> str:
     language = str(customer.identity.get("language_pref", "")).casefold()
-    if category_slug == "pharmacies" and language.startswith("hi"):
+    if any(k in language for k in ("hi", "hindi")):
         return "Namaste"
     return "Hi"
 
@@ -135,14 +231,21 @@ def _render_merchant(
     if plan.objective == "improve_listing":
         performance = facts.get("performance", {})
         metric = performance.get("metric", "performance") if isinstance(performance, dict) else "performance"
+        delta = performance.get("delta_pct") if isinstance(performance, dict) else None
+        baseline = performance.get("vs_baseline") if isinstance(performance, dict) else None
         peer_ctr_str = _peer_ctr_sentence(facts)
-        detail = f"your {metric} is under pressure"
-        if peer_ctr_str:
-            detail = peer_ctr_str
+        offer = facts.get("offer") or (merchant.offers[0] if merchant.offers else None)
+        offer_title = offer.get("title") if isinstance(offer, dict) else None
+        m_name = merchant.identity.get("name")
+        place_ref = f" at {m_name}" if m_name else ""
+        metric_label = _metric_display(metric)
+        delta_str = f" are down {_percent(delta)} this week" if delta is not None else " need attention"
+        base_clause = f" (vs {baseline} baseline)" if baseline else ""
+        peer_clause = f". Meanwhile, {peer_ctr_str}" if peer_ctr_str else ""
+        offer_mention = f" spotlighting your {offer_title}" if offer_title else ""
         return (
-            f"{sal}, {detail} — your listing needs a refresh to close the gap. "
-            f"Want me to draft the update?",
-            [owner, metric],
+            f"{sal}, your {metric_label}{delta_str}{base_clause}{peer_clause}. Updating your profile posts and photos{place_ref} will help close the gap. Want me to draft an updated listing headline{offer_mention}?",
+            [owner, metric_label],
         )
 
     if plan.objective == "reactivate_customers":
@@ -214,6 +317,13 @@ def _render_merchant(
                 f"Want me to flesh this out into a shareable draft?",
                 [owner, topic],
             )
+        offer = facts.get("offer") or (merchant.offers[0] if merchant.offers else None)
+        offer_title = offer.get("title") if isinstance(offer, dict) else None
+        if merchant_msg and offer_title:
+            return (
+                f"{sal}, for the {topic}, we can structure a program anchored around your {offer_title} offer. Want me to draft the class schedule and promotional post?",
+                [owner, topic, offer_title],
+            )
         if merchant_msg:
             # Fix 9B: frame as follow-up rather than verbatim echo to avoid garbled quotes
             return (
@@ -229,15 +339,27 @@ def _render_merchant(
     if plan.objective == "restart_merchant_conversation":
         days = facts.get("days_inactive")
         peer_ctr_str = _peer_ctr_sentence(facts)
+        biz_name = merchant.identity.get("name")
+        place_str = f" for {biz_name}" if biz_name else ""
+        offer = facts.get("offer") or (merchant.offers[0] if merchant.offers else None)
+        offer_title = offer.get("title") if isinstance(offer, dict) else None
+        offer_ask = f" around your {offer_title} offer" if offer_title else ""
+        campaign_term = {
+            "salons": "client booking promotion",
+            "gyms": "member reactivation campaign",
+            "restaurants": "order promotion",
+            "dentists": "patient appointment campaign",
+            "pharmacies": "refill reminder campaign",
+        }.get(category.slug, "promotional campaign")
         if peer_ctr_str and days:
             return (
-                f"{sal}, we have not spoken in {days} days. Meanwhile, {peer_ctr_str}. "
-                f"Want me to share one growth idea to act on this week?",
+                f"{sal}, we have not spoken in {days} days. Meanwhile, {peer_ctr_str}{place_str}. "
+                f"Want me to prepare a {campaign_term}{offer_ask}?",
                 [owner, str(days)],
             )
         return (
             f"{sal}, we have not spoken in {days} days. "
-            f"Want me to send one useful growth idea for your business?",
+            f"Want me to send one useful booking idea{place_str}?",
             [owner, str(days or "")],
         )
 
@@ -257,7 +379,7 @@ def _render_merchant(
         return _render_perf_spike(sal, category, trigger, facts)
 
     if trigger.kind in {"ipl_match_today", "festival", "local_event"}:
-        return _render_event(sal, category, trigger, facts)
+        return _render_event(sal, category, merchant, trigger, facts)
 
     if trigger.kind == "supply_alert":
         molecule = facts.get("molecule")
@@ -287,7 +409,7 @@ def _render_merchant(
         detail = f"{competitor} opened {distance} km away" if competitor and distance else "a nearby competitor opened"
         offer_note = f" They are advertising {their_offer}." if their_offer else ""
         peer_ctr_str = _peer_ctr_sentence(facts)
-        position_note = f" Your current {peer_ctr_str}." if peer_ctr_str else ""
+        position_note = f" Currently {peer_ctr_str}." if peer_ctr_str else ""
         return (
             f"{sal}, {detail}.{offer_note}{position_note} "
             f"Want me to review your listing and draft a counter-position?",
@@ -302,7 +424,7 @@ def _render_merchant(
             detail += f" for ₹{amount}"
         return (
             f"{sal}, your {merchant.subscription.get('plan', 'current')} plan renews {detail}. "
-            f"Want me to prepare the renewal details?",
+            f"Want me to send the renewal invoice and breakdown of your membership ROI?",
             [owner, detail],
         )
 
@@ -343,6 +465,13 @@ def _render_merchant(
                 f"Want me to flesh this out into a shareable draft?",
                 [owner, topic],
             )
+        offer = facts.get("offer")
+        offer_title = offer.get("title") if isinstance(offer, dict) else None
+        if merchant_msg and offer_title:
+            return (
+                f"{sal}, for the {topic}, we can structure a program anchored around your {offer_title} offer. Want me to draft the full session plan and schedule?",
+                [owner, topic, offer_title],
+            )
         if merchant_msg:
             # Fix 9B: frame as follow-up rather than verbatim echo to avoid garbled quotes
             return (
@@ -369,10 +498,22 @@ def _render_merchant(
             detail = f"in {days} days"
         else:
             detail = "recently"
+        biz_name = merchant.identity.get("name")
+        place_str = f" at {biz_name}" if biz_name else ""
+        offer = facts.get("offer") or (merchant.offers[0] if merchant.offers else None)
+        offer_title = offer.get("title") if isinstance(offer, dict) else None
+        campaign_term = {
+            "salons": "client booking promotion",
+            "gyms": "member reactivation campaign",
+            "restaurants": "order promotion",
+            "dentists": "patient appointment campaign",
+            "pharmacies": "refill reminder campaign",
+        }.get(category.slug, "promotional campaign")
+        offer_ask = f" around your {offer_title} offer" if offer_title else ""
         if peer_ctr_str and days is not None:
             return (
-                f"{sal}, we have not spoken {detail}. Meanwhile, {peer_ctr_str}. "
-                f"Want me to share one growth idea to act on this week?",
+                f"{sal}, we have not spoken {detail}. Meanwhile, {peer_ctr_str}{place_str}. "
+                f"Want me to prepare a {campaign_term}{offer_ask}?",
                 [owner, str(days)],
             )
         if days is not None:
@@ -400,6 +541,7 @@ def _render_merchant(
 def _render_event(
     sal: str,
     category: CategoryContext,
+    merchant: MerchantContext,
     trigger: NormalizedTrigger,
     facts: dict[str, Any],
 ) -> tuple[str, list[str]]:
@@ -413,6 +555,10 @@ def _render_event(
     raw_time = facts.get("match_time_iso") or facts.get("date")
     offer = facts.get("offer")
     offer_title = offer.get("title") if isinstance(offer, dict) else None
+    biz_name = merchant.identity.get("name")
+    orders = merchant.customer_aggregate.get("delivery_orders_30d")
+    orders_str = f" — you had {orders} delivery orders this month" if orders else ""
+    place_str = f" for {biz_name}" if biz_name else ""
 
     # Format ISO timestamp to human-readable time
     readable_time = _format_event_time(raw_time)
@@ -434,13 +580,13 @@ def _render_event(
         if is_weeknight:
             insight = " Weeknight matches typically drive footfall — good time to push your offer."
         else:
-            insight = " Weekend IPL matches usually shift orders to home-watching — consider delivery-focused promotion instead of dine-in."
+            insight = f" Weekend matches shift orders to home-watching{orders_str}."
 
     offer_note = f" Your active offer: {offer_title}." if offer_title else ""
 
     return (
         f"{sal}, {detail} tonight.{insight}{offer_note} "
-        f"Want me to prepare the promotion?",
+        f"Want me to draft a matchday delivery promotion{place_str}?",
         [sal, detail, offer_title or ""],
     )
 
@@ -459,6 +605,7 @@ def _render_seasonal_digest(
     source: str | None,
     actionable: str | None,
     owner: str,
+    trigger: NormalizedTrigger | None = None,
 ) -> tuple[str, list[str]]:
     """Render a seasonal digest item that was selected as a competing opportunity
     when a distant festival trigger fired.
@@ -566,12 +713,18 @@ def _render_seasonal_digest(
                 )
                 break
 
+    festival = trigger.facts.get("festival") if trigger else None
+    days_until = trigger.facts.get("days_until") if trigger else None
+    lead_in = ""
+    if festival and days_until is not None:
+        lead_in = f"while {festival} is still {days_until} days away, "
+
     if why_now:
-        body = f"{sal}, {insight}. {why_now}."
+        body = f"{sal}, {lead_in}{insight[:1].lower() + insight[1:] if lead_in else insight}. {why_now}."
     elif source_is_specific:
-        body = f"{sal}, {insight} ({source})."
+        body = f"{sal}, {lead_in}{insight[:1].lower() + insight[1:] if lead_in else insight} ({source})."
     else:
-        body = f"{sal}, {insight}."
+        body = f"{sal}, {lead_in}{insight[:1].lower() + insight[1:] if lead_in else insight}."
 
     return f"{body} {cta}", [owner, insight, offer_title or ""]
 
@@ -597,7 +750,7 @@ def _render_digest(
     # Use the digest title to frame the seasonal context, and derive
     # a natural CTA from the actionable field — never embed it verbatim.
     if trigger.kind == "festival_upcoming":
-        return _render_seasonal_digest(sal, category, merchant, facts, item, title, source, actionable, owner)
+        return _render_seasonal_digest(sal, category, merchant, facts, item, title, source, actionable, owner, trigger)
 
     # --- Standard digest body ---
     # Fix 2: strip mojibake em-dash from title before embedding
@@ -624,18 +777,21 @@ def _render_digest(
     if trigger.kind == "cde_opportunity":
         credits = facts.get("credits") or trigger.facts.get("credits")
         fee = facts.get("fee") or trigger.facts.get("fee")
+        date_str = ""
         if item_date:
-            readable = _format_event_time(item_date) or str(item_date)[:10]
-            body += f" — {readable}"
-        if credits and fee:
-            fee_str = str(fee).replace("_", " ")
-            body += f". {credits} CDE credits, {fee_str}"
-        elif credits:
-            body += f". {credits} CDE credits"
-        if actionable:
-            cta = f"{actionable}. Want me to add it to your calendar?"
-        else:
-            cta = "Want me to add it to your calendar and draft a reminder?"
+            try:
+                from datetime import datetime as _dt
+                dt = _dt.fromisoformat(item_date)
+                date_str = f" ({dt.strftime('%d %b, %I:%M%p').lower()})"
+            except Exception:
+                readable = _format_event_time(item_date) or str(item_date)[:10]
+                date_str = f" ({readable})"
+        fee_str = f", {str(fee).replace('_', ' ')}" if fee else ""
+        credits_str = f". It offers {credits} CDE credits{fee_str}" if credits else ""
+        return (
+            f"{sal}, an upcoming CDE opportunity landed: {title}{date_str}{credits_str}. Want me to add it to your calendar and draft a reminder?",
+            [owner, title or "", source or ""],
+        )
     elif trigger.kind == "research_digest":
         cta = "Want me to pull the source and draft a patient message?"
     elif plan.cta == "confirm":
@@ -736,6 +892,28 @@ def _render_perf_spike(
 
         return f"{body}. {cta}", [sal, metric_label, _percent(delta)]
 
+    # Check for category seasonal trends in trigger facts (e.g. summer demand shift)
+    trends = trigger.facts.get("trends", [])
+    season = str(trigger.facts.get("season", "")).replace("_2026", "").replace("_", " ")
+    if trends:
+        top_trends = []
+        for tr in trends[:2]:
+            parts = str(tr).split("_demand_")
+            if len(parts) == 2:
+                item_name = parts[0]
+                pct = parts[1].replace("+", "")
+                top_trends.append(f"{item_name} demand is up {pct}%")
+        trend_clause = " and ".join(top_trends) if top_trends else ""
+        if trend_clause:
+            season_str = f"{season.capitalize()} " if season else ""
+            detail = f" Your active offer is {offer_title}." if offer_title else ""
+            if peer_sentence:
+                detail = f" {peer_sentence.capitalize()}.{detail}"
+            return (
+                f"{sal}, {season_str}seasonal demand is shifting: {trend_clause}.{detail} Want me to prepare a promotion?",
+                [sal, offer_title or ""],
+            )
+
     # Fallback
     demand_noun = _category_demand_noun(category.slug)
     detail = f" Your active offer is {offer_title}." if offer_title else ""
@@ -822,11 +1000,16 @@ def _render_curious_ask(
     )
     merchant_views = merchant.performance.get("views")
 
+    locality = merchant.identity.get("locality")
+    biz_name = merchant.identity.get("name")
+    loc_ref = f"in {locality}" if locality else "in your category"
+    place_ref = f"at {biz_name}" if biz_name else "at your place"
+
     if top_query and top_delta is not None:
         trend_pct = f"{abs(top_delta) * 100:g}%"
         body = (
-            f"{sal}, searches for '{top_query}' are up {trend_pct} in your category. "
-            f"Which service has been most asked for at your place this week?"
+            f"{sal}, searches for '{top_query}' are up {trend_pct} {loc_ref}. "
+            f"Which service has been most asked for {place_ref} this week?"
         )
         cta = "Reply back and I’ll draft a Google post + a ready-to-share note around your answer."
         return f"{body} {cta}", [sal, top_query, trend_pct]
@@ -840,7 +1023,7 @@ def _render_curious_ask(
         cta = "Reply back and I’ll draft a Google post around your answer."
         return f"{body} {cta}", [sal, str(merchant_views), str(peer_views)]
 
-    body = f"{sal}, which service or product has been most asked for at your {category.slug} this week?"
+    body = f"{sal}, which service or product has been most asked for {place_ref} {loc_ref} this week?"
     cta = "Reply back and I’ll draft a Google post + a ready-to-use customer reply."
     return f"{body} {cta}", [sal, category.slug]
 

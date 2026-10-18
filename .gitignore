@@ -1,13 +1,65 @@
+# Python
 __pycache__/
 *.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environments
 .venv/
 venv/
-.env
+ENV/
+env.bak/
+venv.bak/
 
-# Temporary diagnostic/test scripts — never commit these
+# Environment Variables & Secrets (CRITICAL: Do NOT commit secrets!)
+.env
+.env.*
+!.env.example
+
+# IDE & Tooling
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# AI Agents & Scratch Artifacts
+.agent/
+.agents/
+.gemini/
+.gsd/
+adapters/
+scratch/
+scripts/
+GSD-STYLE.md
+PROJECT_RULES.md
+VERSION
+model_capabilities.yaml
+
+# Temporary test/diagnostic scripts
 _check_*.py
 _diagnose_*.py
 _spot_*.py
 _p*_analysis.py
 _p*_check.py
 _p*_debug*.py
+test_all_compositions.py

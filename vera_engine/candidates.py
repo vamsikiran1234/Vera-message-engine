@@ -223,7 +223,7 @@ def generate_candidates(
     if trigger.scope == "customer":
         if not customer or customer.customer_id != trigger.customer_id or not _has_consent(customer):
             return []
-        if trigger.kind in {"recall_due", "chronic_refill_due", "appointment_tomorrow", "trial_followup"}:
+        if trigger.kind in {"recall_due", "chronic_refill_due", "appointment_tomorrow", "trial_followup", "wedding_package_followup"}:
             facts = {signal.name: signal.value for signal in signals if signal.name.startswith("customer_")}
             facts.update(trigger.facts)
             if offer:
@@ -396,7 +396,7 @@ def generate_candidates(
                 conversation_evidence=recent_history,
             ))
 
-    if trigger.kind in {"supply_alert", "review_theme_emerged", "competitor_opened", "gbp_unverified", "renewal_due", "milestone_reached", "dormant_with_vera", "festival_upcoming", "active_planning_intent", "curious_ask_due", "winback_eligible"}:
+    if trigger.kind in {"supply_alert", "review_theme_emerged", "competitor_opened", "gbp_unverified", "renewal_due", "milestone_reached", "dormant_with_vera", "festival_upcoming", "active_planning_intent", "curious_ask_due", "winback_eligible", "ipl_match_today", "local_event"}:
         useful_facts = dict(trigger.facts)
         if offer:
             useful_facts["offer"] = offer
@@ -517,7 +517,7 @@ def generate_candidates(
                 candidates.append(CandidateAction(
                     objective="share_relevant_category_knowledge",
                     action_type="inform",
-                    cta="view",
+                    cta="draft",
                     primary_signal="category_seasonal_opportunity",
                     evidence=(f"category.digest.id={current_item.get('id', '')}",),
                     facts=digest_facts,
@@ -537,6 +537,8 @@ def generate_candidates(
             "intent": trigger.facts,
             "recent_message": recent_history[-1],
         }
+        if offer:
+            intent_facts["offer"] = offer
         if trigger.facts.get("intent_topic"):
             intent_facts["intent_topic"] = trigger.facts["intent_topic"]
         merchant_last = trigger.facts.get("merchant_last_message")
@@ -599,14 +601,16 @@ def _objective_for_kind(kind: str) -> str:
         "active_planning_intent": "continue_active_plan",
         "curious_ask_due": "ask_merchant_for_insight",
         "winback_eligible": "propose_merchant_winback",
+        "ipl_match_today": "promote_event",
+        "local_event": "promote_event",
     }.get(kind, "review_current_signal")
 
 
 def _cta_for_kind(kind: str) -> str:
     return {
         "supply_alert": "approve",
-        "review_theme_emerged": "view",
-        "competitor_opened": "view",
+        "review_theme_emerged": "draft",
+        "competitor_opened": "draft",
         "gbp_unverified": "confirm",
         "renewal_due": "confirm",
         "milestone_reached": "send",
@@ -615,6 +619,8 @@ def _cta_for_kind(kind: str) -> str:
         "active_planning_intent": "send",
         "curious_ask_due": "reply",
         "winback_eligible": "approve",
+        "ipl_match_today": "promote",
+        "local_event": "promote",
     }.get(kind, "reply")
 
 
