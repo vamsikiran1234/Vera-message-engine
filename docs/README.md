@@ -22,6 +22,7 @@
 | Resource | Direct Link | Description |
 | :--- | :--- | :--- |
 | 🌐 **Live Bot Base URL** | [`https://vera-message-engine-4r0i.onrender.com`](https://vera-message-engine-4r0i.onrender.com) | Primary endpoint for magicpin Evaluation Harness |
+| 📊 **Evaluation Scorecard API** | [`/v1/evaluation`](https://vera-message-engine-4r0i.onrender.com/v1/evaluation) | Verified 41/50 benchmark scorecard & dimension metrics |
 | 🩺 **Health Check API** | [`/v1/healthz`](https://vera-message-engine-4r0i.onrender.com/v1/healthz) | Live system status & uptime verification |
 | 📖 **Interactive API Docs** | [`/docs`](https://vera-message-engine-4r0i.onrender.com/docs) | Interactive Swagger UI testing interface |
 | ℹ️ **Bot Metadata API** | [`/v1/metadata`](https://vera-message-engine-4r0i.onrender.com/v1/metadata) | Engine team info, model approach & version |
